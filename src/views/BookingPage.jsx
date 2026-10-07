@@ -213,7 +213,7 @@ export default function BookingPage() {
                             className="space-y-4"
                         >
                             <h2 className="font-display text-2xl font-semibold">
-                                Who's going?
+                                Who&apos;s going?
                             </h2>
                             <Input
                                 label="Full name"
@@ -347,7 +347,7 @@ export default function BookingPage() {
                                 Payment
                             </h2>
                             <p className="font-body text-sm text-white/60">
-                                Choose how you'd like to pay. Powered by
+                                Choose how you&apos;d like to pay. Powered by
                                 Razorpay (demo).
                             </p>
 
