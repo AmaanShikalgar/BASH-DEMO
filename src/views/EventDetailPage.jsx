@@ -5,10 +5,19 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useNav } from "@/lib/useNav";
 import { motion } from "framer-motion";
-import { ArrowLeft, MapPin, Calendar, Clock } from "lucide-react";
+import { ArrowLeft, MapPin, Calendar, Clock, Check } from "lucide-react";
 import AppShell from "@/components/AppShell";
 import { api, inr } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
+import {
+    QuickInfo,
+    SectionNav,
+    LineupSection,
+    GallerySection,
+    ReviewsSection,
+    FaqSection,
+    LocationSection,
+} from "@/components/EventSections";
 
 export default function EventDetailPage() {
     const { id } = useParams();
@@ -24,6 +33,7 @@ export default function EventDetailPage() {
                 setEvent(r.data);
                 setTier(r.data.tiers[r.data.tiers.length - 1]); // default VIP
             })
+            .catch(() => setEvent(null))
             .finally(() => setLoading(false));
     }, [id]);
 
@@ -119,6 +129,19 @@ export default function EventDetailPage() {
                                 <div className="text-xs text-white/60 font-body mt-1">
                                     {t.note}
                                 </div>
+                                {t.perks?.length > 0 && (
+                                    <ul className="mt-3 space-y-1.5">
+                                        {t.perks.map((perk) => (
+                                            <li
+                                                key={perk}
+                                                className="flex items-start gap-2 text-xs text-white/70 font-body"
+                                            >
+                                                <Check className="w-3.5 h-3.5 mt-0.5 shrink-0 text-purple-300" />
+                                                {perk}
+                                            </li>
+                                        ))}
+                                    </ul>
+                                )}
                             </button>
                         ))}
                     </div>
@@ -137,11 +160,14 @@ export default function EventDetailPage() {
                             <Clock className="w-4 h-4 text-white/60" />
                             {event.time}
                         </div>
+                        <QuickInfo event={event} />
                     </div>
 
                     <p className="font-body text-white/70 leading-relaxed max-w-2xl mb-10">
                         {event.description}
                     </p>
+
+                    <SectionNav event={event} />
 
                     {/* CTAs */}
                     <div className="fixed md:static bottom-0 left-0 right-0 p-5 md:p-0 bg-[#0b0f19]/95 md:bg-transparent backdrop-blur-xl md:backdrop-blur-0 border-t md:border-0 border-white/5 flex gap-3 z-30">
@@ -159,6 +185,14 @@ export default function EventDetailPage() {
                         >
                             View Seat Map
                         </button>
+                    </div>
+
+                    <div className="mt-14 md:mt-16">
+                        <LineupSection event={event} />
+                        <GallerySection event={event} />
+                        <ReviewsSection event={event} />
+                        <FaqSection event={event} />
+                        <LocationSection event={event} />
                     </div>
                 </div>
             </div>

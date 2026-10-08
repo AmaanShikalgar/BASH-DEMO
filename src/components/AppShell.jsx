@@ -4,7 +4,7 @@ import Link from "next/link";
 import NavLink from "@/components/NavLink";
 import { useNav } from "@/lib/useNav";
 import { useAuth } from "@/context/AuthContext";
-import { Bell, Search, Home, Ticket, User, LogOut } from "lucide-react";
+import { Bell, Search, Home, Ticket, User, LogOut, PlusCircle } from "lucide-react";
 
 export default function AppShell({ children, hideBottomNav = false }) {
     const { user, logout } = useAuth();
@@ -49,6 +49,17 @@ export default function AppShell({ children, hideBottomNav = false }) {
                         data-testid="nav-tickets"
                     >
                         My Tickets
+                    </NavLink>
+                    <NavLink
+                        href="/create-event"
+                        className={({ isActive }) =>
+                            isActive
+                                ? "text-white"
+                                : "hover:text-white transition"
+                        }
+                        data-testid="nav-create-event"
+                    >
+                        Create Event
                     </NavLink>
                 </nav>
                 <div className="flex items-center gap-3">
@@ -108,6 +119,16 @@ export default function AppShell({ children, hideBottomNav = false }) {
                     >
                         <Ticket className="w-5 h-5" />
                         Tickets
+                    </NavLink>
+                    <NavLink
+                        href="/create-event"
+                        data-testid="mob-nav-create"
+                        className={({ isActive }) =>
+                            `flex flex-col items-center gap-1 text-xs ${isActive ? "text-white" : "text-white/50"}`
+                        }
+                    >
+                        <PlusCircle className="w-5 h-5" />
+                        Create
                     </NavLink>
                     <NavLink
                         href={user ? "/tickets" : "/login"}

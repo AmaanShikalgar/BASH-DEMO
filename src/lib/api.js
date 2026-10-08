@@ -24,3 +24,14 @@ export function formatErr(detail) {
 
 export const inr = (n) =>
     "₹" + Number(n).toLocaleString("en-IN", { maximumFractionDigits: 0 });
+
+// Resize hosted images (Unsplash / Pexels accept ?w=)
+export function resizeImg(url, w) {
+    try {
+        const u = new URL(url);
+        u.searchParams.set("w", String(w));
+        return u.toString();
+    } catch {
+        return url;
+    }
+}
