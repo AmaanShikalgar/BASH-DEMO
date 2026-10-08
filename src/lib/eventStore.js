@@ -17,7 +17,12 @@ async function readCreated() {
 
 export async function listEvents({ city, genre, q } = {}) {
     // newest created events first, then the seed events
-    let events = [...(await readCreated()), ...seedEvents];
+    // If the database is unreachable (bad/missing DATABASE_URL), still show the seed events.
+    const created = await readCreated().catch((e) => {
+        console.error("listEvents: could not read created events from Neon:", e.message);
+        return [];
+    });
+    let events = [...created, ...seedEvents];
 
     if (city && city !== "all") events = events.filter((e) => e.city_slug === city);
     if (genre && genre !== "all") events = events.filter((e) => e.genre_slug === genre);

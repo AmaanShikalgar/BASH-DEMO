@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-export async function POST(req) {
+async function handle(req) {
     const body = await req.json().catch(() => ({}));
     const name = String(body.name ?? "").trim().slice(0, 80);
     const email = String(body.email ?? "").trim().toLowerCase().slice(0, 200);
@@ -20,4 +20,16 @@ export async function POST(req) {
     if (!user) return NextResponse.json({ detail: "This email is already registered" }, { status: 409 });
 
     return NextResponse.json({ token: await signToken(user.id), user: publicUser(user) });
+}
+
+export async function POST(req) {
+    try {
+        return await handle(req);
+    } catch (e) {
+        console.error("register failed:", e);
+        return NextResponse.json(
+            { detail: "Server error: " + (e?.message || "unknown") + " (check /api/health)" },
+            { status: 500 },
+        );
+    }
 }
