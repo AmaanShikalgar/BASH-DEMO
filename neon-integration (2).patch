@@ -1,0 +1,774 @@
+diff --git a/.env.example b/.env.example
+new file mode 100644
+index 0000000..d08a540
+--- /dev/null
++++ b/.env.example
+@@ -0,0 +1,8 @@
++# Neon connection string (Neon dashboard > Connect > pooled connection)
++DATABASE_URL=postgresql://user:password@ep-xxxx-pooler.region.aws.neon.tech/neondb?sslmode=require
++
++# Secret used to sign login tokens. Generate with: openssl rand -hex 32
++AUTH_SECRET=
++
++# Optional: set to "off" to skip creating the demo account test@bash.in / test1234
++# DEMO_USER=off
+diff --git a/.gitignore b/.gitignore
+index b026e15..bd404aa 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -2,5 +2,4 @@ node_modules
+ .next
+ .env
+ .env*.local
+-/data/created-events.json
+-/data/
+\ No newline at end of file
++
+diff --git a/README.md b/README.md
+index f9fead3..27b6900 100644
+--- a/README.md
++++ b/README.md
+@@ -2,17 +2,25 @@
+ 
+ Next.js 14 (App Router) port of the "Bash" ticket-booking frontend that was originally a Create React App build.
+ 
+-## Run
++## Run locally
+ 
+ ```bash
+ npm install
+-cp .env.example .env     # optional; set BACKEND_URL if your API lives elsewhere
+-npm run dev              # http://localhost:3000
++cp .env.example .env.local   # fill in DATABASE_URL and AUTH_SECRET
++npm run dev                  # http://localhost:3000
+ ```
+ 
+-The app expects the original FastAPI backend (`/api/events`, `/api/auth/*`, `/api/bookings/*`).
+-Browser calls go to `/api/*` on this app, and `next.config.js` proxies them to `BACKEND_URL`
+-(defaults to the original preview URL, which may expire).
++## Database (Neon Postgres)
++
++Users, user-created events, bookings and login-throttle data live in Neon. Seed events stay in `src/data/seedEvents.js`.
++Tables are created automatically on the first request; `scripts/schema.sql` (or `npm run db:setup`) does the same by hand.
++
++## Deploy to Vercel
++
++1. Push the repo to GitHub and import it in Vercel.
++2. Add the Neon integration (Vercel > Storage > Neon, or Marketplace). It injects `DATABASE_URL` for you.
++3. Add `AUTH_SECRET` (`openssl rand -hex 32`) under Project Settings > Environment Variables.
++4. Deploy. Log in with `test@bash.in` / `test1234` (set `DEMO_USER=off` to disable this account).
+ 
+ ## Routes
+ 
+diff --git a/package.json b/package.json
+index 285de51..9194bd4 100644
+--- a/package.json
++++ b/package.json
+@@ -6,9 +6,11 @@
+     "dev": "next dev",
+     "build": "next build",
+     "start": "next start",
+-    "lint": "next lint"
++    "lint": "next lint",
++    "db:setup": "node --env-file=.env.local scripts/db-setup.mjs"
+   },
+   "dependencies": {
++    "@neondatabase/serverless": "^0.10.4",
+     "@tanstack/react-query": "^5.59.0",
+     "axios": "^1.7.7",
+     "framer-motion": "^11.11.0",
+@@ -24,5 +26,8 @@
+     "eslint-config-next": "14.2.15",
+     "postcss": "^8.4.47",
+     "tailwindcss": "^3.4.14"
++  },
++  "engines": {
++    "node": ">=20"
+   }
+ }
+diff --git a/scripts/db-setup.mjs b/scripts/db-setup.mjs
+new file mode 100644
+index 0000000..8ae67c4
+--- /dev/null
++++ b/scripts/db-setup.mjs
+@@ -0,0 +1,17 @@
++// Usage: DATABASE_URL=... node scripts/db-setup.mjs   (or: npm run db:setup with .env.local loaded by --env-file)
++import { neon } from "@neondatabase/serverless";
++import fs from "fs";
++
++const url = process.env.DATABASE_URL;
++if (!url) {
++    console.error("Set DATABASE_URL first.");
++    process.exit(1);
++}
++const sql = neon(url);
++const statements = fs
++    .readFileSync(new URL("./schema.sql", import.meta.url), "utf8")
++    .split(/;\s*\n/)
++    .map((s) => s.replace(/^--.*$/gm, "").trim())
++    .filter(Boolean);
++for (const s of statements) await sql.query(s);
++console.log(`Done: ran ${statements.length} statements.`);
+diff --git a/scripts/schema.sql b/scripts/schema.sql
+new file mode 100644
+index 0000000..bf5a9aa
+--- /dev/null
++++ b/scripts/schema.sql
+@@ -0,0 +1,46 @@
++-- Optional: run this in the Neon SQL editor. The app also creates these tables automatically on first request.
++CREATE TABLE IF NOT EXISTS users (
++    id            text PRIMARY KEY,
++    name          text NOT NULL,
++    email         text NOT NULL UNIQUE,
++    password_hash text NOT NULL,
++    created_at    timestamptz NOT NULL DEFAULT now()
++);
++
++CREATE TABLE IF NOT EXISTS events (
++    id         text PRIMARY KEY,
++    data       jsonb NOT NULL,
++    created_at timestamptz NOT NULL DEFAULT now()
++);
++
++CREATE TABLE IF NOT EXISTS bookings (
++    id             text PRIMARY KEY,
++    user_id        text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
++    event_id       text NOT NULL,
++    tier           text NOT NULL,
++    quantity       integer NOT NULL,
++    amount         integer NOT NULL,
++    attendee_name  text NOT NULL,
++    attendee_email text NOT NULL,
++    attendee_phone text NOT NULL,
++    id_type        text NOT NULL,
++    id_last4       text NOT NULL,
++    event_title    text,
++    event_venue    text,
++    event_city     text,
++    event_date     text,
++    event_time     text,
++    event_image    text,
++    status         text NOT NULL DEFAULT 'pending',
++    ticket_code    text UNIQUE,
++    payment_method text,
++    paid_at        timestamptz,
++    created_at     timestamptz NOT NULL DEFAULT now()
++);
++CREATE INDEX IF NOT EXISTS bookings_user_idx ON bookings (user_id, created_at DESC);
++
++CREATE TABLE IF NOT EXISTS login_attempts (
++    email      text NOT NULL,
++    created_at timestamptz NOT NULL DEFAULT now()
++);
++CREATE INDEX IF NOT EXISTS login_attempts_idx ON login_attempts (email, created_at);
+diff --git a/src/app/api/auth/login/route.js b/src/app/api/auth/login/route.js
+index 0aebb68..7b77d65 100644
+--- a/src/app/api/auth/login/route.js
++++ b/src/app/api/auth/login/route.js
+@@ -11,12 +11,12 @@ import {
+ 
+ export const dynamic = "force-dynamic";
+ 
+-export async function POST(req) {
++async function handle(req) {
+     const body = await req.json().catch(() => ({}));
+     const email = String(body.email ?? "").trim().toLowerCase().slice(0, 200);
+     const password = String(body.password ?? "").slice(0, 200);
+ 
+-    if (isThrottled(email)) {
++    if (await isThrottled(email)) {
+         return NextResponse.json(
+             { detail: "Too many failed attempts. Try again in a few minutes." },
+             { status: 429 },
+@@ -26,10 +26,22 @@ export async function POST(req) {
+     const user = email ? await findUserByEmail(email) : null;
+     const ok = user && (await verifyPassword(password, user.password_hash));
+     if (!ok) {
+-        recordFailure(email);
++        await recordFailure(email);
+         return NextResponse.json({ detail: "Invalid email or password" }, { status: 401 });
+     }
+ 
+-    clearFailures(email);
++    await clearFailures(email);
+     return NextResponse.json({ token: await signToken(user.id), user: publicUser(user) });
+ }
++
++export async function POST(req) {
++    try {
++        return await handle(req);
++    } catch (e) {
++        console.error("login failed:", e);
++        return NextResponse.json(
++            { detail: "Server error: " + (e?.message || "unknown") + " (check /api/health)" },
++            { status: 500 },
++        );
++    }
++}
+diff --git a/src/app/api/auth/register/route.js b/src/app/api/auth/register/route.js
+index 1123a55..5b0f7dc 100644
+--- a/src/app/api/auth/register/route.js
++++ b/src/app/api/auth/register/route.js
+@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
+ 
+ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+ 
+-export async function POST(req) {
++async function handle(req) {
+     const body = await req.json().catch(() => ({}));
+     const name = String(body.name ?? "").trim().slice(0, 80);
+     const email = String(body.email ?? "").trim().toLowerCase().slice(0, 200);
+@@ -21,3 +21,15 @@ export async function POST(req) {
+ 
+     return NextResponse.json({ token: await signToken(user.id), user: publicUser(user) });
+ }
++
++export async function POST(req) {
++    try {
++        return await handle(req);
++    } catch (e) {
++        console.error("register failed:", e);
++        return NextResponse.json(
++            { detail: "Server error: " + (e?.message || "unknown") + " (check /api/health)" },
++            { status: 500 },
++        );
++    }
++}
+diff --git a/src/app/api/health/route.js b/src/app/api/health/route.js
+new file mode 100644
+index 0000000..29671ac
+--- /dev/null
++++ b/src/app/api/health/route.js
+@@ -0,0 +1,24 @@
++import { NextResponse } from "next/server";
++import { sql, ensureReady } from "@/lib/db";
++
++export const dynamic = "force-dynamic";
++
++// Visit /api/health after deploying to see what is misconfigured. Never exposes secret values.
++export async function GET() {
++    const checks = {
++        DATABASE_URL: Boolean(process.env.DATABASE_URL),
++        AUTH_SECRET: Boolean(process.env.AUTH_SECRET),
++        database: "not checked",
++    };
++    if (checks.DATABASE_URL) {
++        try {
++            await ensureReady();
++            const rows = await sql`SELECT count(*)::int AS users FROM users`;
++            checks.database = `ok (${rows[0].users} users)`;
++        } catch (e) {
++            checks.database = `error: ${e.message}`;
++        }
++    }
++    const ok = checks.DATABASE_URL && checks.AUTH_SECRET && checks.database.startsWith("ok");
++    return NextResponse.json(checks, { status: ok ? 200 : 500 });
++}
+diff --git a/src/lib/auth.js b/src/lib/auth.js
+index 445e8b8..9089448 100644
+--- a/src/lib/auth.js
++++ b/src/lib/auth.js
+@@ -1,26 +1,20 @@
+-// Server-only auth: users in data/users.json, scrypt password hashes, signed tokens.
++// Server-only auth: users in Neon (table: users), scrypt password hashes, signed tokens.
+ import crypto from "crypto";
+ import { promisify } from "util";
+-import { readJson, writeJson, withLock } from "@/lib/db";
++import { sql, ensureReady } from "@/lib/db";
+ 
+ const scrypt = promisify(crypto.scrypt);
+-const USERS = "users.json";
+ const TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+ 
+ /* ---------- secret ---------- */
+-let cachedSecret = null;
+-async function getSecret() {
++// Set AUTH_SECRET in Vercel (e.g. `openssl rand -hex 32`). Serverless has no persistent
++// disk, so there is no file fallback; local dev uses a fixed insecure secret.
++function getSecret() {
+     if (process.env.AUTH_SECRET) return process.env.AUTH_SECRET;
+-    if (cachedSecret) return cachedSecret;
+-    return withLock("auth-secret", async () => {
+-        let stored = await readJson("auth-secret.json", null);
+-        if (!stored?.secret) {
+-            stored = { secret: crypto.randomBytes(32).toString("hex") };
+-            await writeJson("auth-secret.json", stored);
+-        }
+-        cachedSecret = stored.secret;
+-        return cachedSecret;
+-    });
++    if (process.env.NODE_ENV === "production") {
++        throw new Error("AUTH_SECRET is not set. Add it to your Vercel environment variables.");
++    }
++    return "dev-only-insecure-secret";
+ }
+ 
+ /* ---------- passwords ---------- */
+@@ -43,14 +37,14 @@ const b64 = (buf) => Buffer.from(buf).toString("base64url");
+ 
+ export async function signToken(userId) {
+     const body = b64(JSON.stringify({ sub: userId, exp: Date.now() + TOKEN_TTL_MS }));
+-    const sig = crypto.createHmac("sha256", await getSecret()).update(body).digest("base64url");
++    const sig = crypto.createHmac("sha256", getSecret()).update(body).digest("base64url");
+     return `${body}.${sig}`;
+ }
+ 
+ async function verifyToken(token) {
+     const [body, sig] = String(token).split(".");
+     if (!body || !sig) return null;
+-    const expected = crypto.createHmac("sha256", await getSecret()).update(body).digest("base64url");
++    const expected = crypto.createHmac("sha256", getSecret()).update(body).digest("base64url");
+     const a = Buffer.from(sig);
+     const b = Buffer.from(expected);
+     if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+@@ -65,56 +59,21 @@ async function verifyToken(token) {
+ /* ---------- users ---------- */
+ export const publicUser = (u) => ({ id: u.id, name: u.name, email: u.email });
+ 
+-// Demo account matching the prefilled login form (test@bash.in / test1234).
+-// Set DEMO_USER=off in your environment to skip creating it.
+-let seeding = null;
+-function seedOnce() {
+-    if (!seeding) {
+-        seeding = withLock(USERS, async () => {
+-            if (process.env.DEMO_USER === "off") return;
+-            const users = await readJson(USERS, []);
+-            if (users.some((u) => u.email === "test@bash.in")) return;
+-            users.push({
+-                id: crypto.randomBytes(12).toString("hex"),
+-                name: "Test User",
+-                email: "test@bash.in",
+-                password_hash: await hashPassword("test1234"),
+-                created_at: new Date().toISOString(),
+-            });
+-            await writeJson(USERS, users);
+-        }).catch((e) => {
+-            seeding = null;
+-            throw e;
+-        });
+-    }
+-    return seeding;
+-}
+-
+-async function loadUsers() {
+-    await seedOnce();
+-    return readJson(USERS, []);
++export async function findUserByEmail(email) {
++    await ensureReady();
++    const rows = await sql`SELECT * FROM users WHERE email = ${String(email).trim().toLowerCase()}`;
++    return rows[0] || null;
+ }
+ 
+-export const findUserByEmail = async (email) =>
+-    (await loadUsers()).find((u) => u.email === String(email).trim().toLowerCase()) || null;
+-
+ export async function createUser({ name, email, password }) {
+-    await seedOnce(); // must run before taking the lock below
+-    return withLock(USERS, async () => {
+-        const users = await readJson(USERS, []);
+-        const clean = String(email).trim().toLowerCase();
+-        if (users.some((u) => u.email === clean)) return null; // already registered
+-        const user = {
+-            id: crypto.randomBytes(12).toString("hex"),
+-            name: String(name).trim(),
+-            email: clean,
+-            password_hash: await hashPassword(password),
+-            created_at: new Date().toISOString(),
+-        };
+-        users.push(user);
+-        await writeJson(USERS, users);
+-        return user;
+-    });
++    await ensureReady();
++    const clean = String(email).trim().toLowerCase();
++    const rows = await sql`
++        INSERT INTO users (id, name, email, password_hash)
++        VALUES (${crypto.randomBytes(12).toString("hex")}, ${String(name).trim()}, ${clean}, ${await hashPassword(password)})
++        ON CONFLICT (email) DO NOTHING
++        RETURNING *`;
++    return rows[0] || null; // null = already registered
+ }
+ 
+ /** Reads "Authorization: Bearer <token>" and returns the user, or null. */
+@@ -124,25 +83,25 @@ export async function getUserFromRequest(req) {
+     if (!token) return null;
+     const payload = await verifyToken(token);
+     if (!payload) return null;
+-    const users = await loadUsers();
+-    return users.find((u) => u.id === payload.sub) || null;
++    await ensureReady();
++    const rows = await sql`SELECT * FROM users WHERE id = ${payload.sub}`;
++    return rows[0] || null;
+ }
+ 
+-/* ---------- login throttle (in memory): 5 failures / 10 min per email ---------- */
+-const failures = new Map();
+-const WINDOW = 10 * 60 * 1000;
+-export function isThrottled(email) {
+-    const rec = failures.get(email);
+-    if (!rec) return false;
+-    if (Date.now() - rec.first > WINDOW) {
+-        failures.delete(email);
+-        return false;
+-    }
+-    return rec.count >= 5;
++/* ---------- login throttle (stored in Neon so it works across serverless instances) ---------- */
++// 5 failures / 10 min per email
++export async function isThrottled(email) {
++    await ensureReady();
++    const rows = await sql`
++        SELECT count(*)::int AS n FROM login_attempts
++         WHERE email = ${email} AND created_at > now() - interval '10 minutes'`;
++    return rows[0].n >= 5;
++}
++export async function recordFailure(email) {
++    await ensureReady();
++    await sql`INSERT INTO login_attempts (email) VALUES (${email})`;
+ }
+-export function recordFailure(email) {
+-    const rec = failures.get(email);
+-    if (!rec || Date.now() - rec.first > WINDOW) failures.set(email, { count: 1, first: Date.now() });
+-    else rec.count += 1;
++export async function clearFailures(email) {
++    await ensureReady();
++    await sql`DELETE FROM login_attempts WHERE email = ${email}`;
+ }
+-export const clearFailures = (email) => failures.delete(email);
+diff --git a/src/lib/bookingStore.js b/src/lib/bookingStore.js
+index 6690d0b..bd940ab 100644
+--- a/src/lib/bookingStore.js
++++ b/src/lib/bookingStore.js
+@@ -1,54 +1,64 @@
+-// Server-only bookings store (data/bookings.json).
++// Server-only bookings store (Neon table: bookings).
+ import crypto from "crypto";
+-import { readJson, writeJson, withLock } from "@/lib/db";
++import { sql, ensureReady } from "@/lib/db";
+ 
+-const FILE = "bookings.json";
++const iso = (v) => (v ? new Date(v).toISOString() : null);
+ 
+-// Fields returned to the client (no raw ID number, no user id)
+-const view = ({ user_id, ...rest }) => rest;
++// Fields returned to the client (no user id)
++const view = ({ user_id, ...rest }) => ({
++    ...rest,
++    paid_at: iso(rest.paid_at),
++    created_at: iso(rest.created_at),
++});
+ 
+ export async function listBookingsForUser(userId) {
+-    const all = await readJson(FILE, []);
+-    return all
+-        .filter((b) => b.user_id === userId)
+-        .sort((a, b) => b.created_at.localeCompare(a.created_at))
+-        .map(view);
++    await ensureReady();
++    const rows = await sql`
++        SELECT * FROM bookings WHERE user_id = ${userId} ORDER BY created_at DESC`;
++    return rows.map(view);
+ }
+ 
+-export function createBooking(data) {
+-    return withLock(FILE, async () => {
+-        const all = await readJson(FILE, []);
+-        const booking = {
+-            ...data,
+-            id: crypto.randomBytes(12).toString("hex"),
+-            status: "pending",
+-            ticket_code: null,
+-            created_at: new Date().toISOString(),
+-        };
+-        all.push(booking);
+-        await writeJson(FILE, all);
+-        return view(booking);
+-    });
++export async function createBooking(d) {
++    await ensureReady();
++    const id = crypto.randomBytes(12).toString("hex");
++    const rows = await sql`
++        INSERT INTO bookings (
++            id, user_id, event_id, tier, quantity, amount,
++            attendee_name, attendee_email, attendee_phone, id_type, id_last4,
++            event_title, event_venue, event_city, event_date, event_time, event_image
++        ) VALUES (
++            ${id}, ${d.user_id}, ${d.event_id}, ${d.tier}, ${d.quantity}, ${d.amount},
++            ${d.attendee_name}, ${d.attendee_email}, ${d.attendee_phone}, ${d.id_type}, ${d.id_last4},
++            ${d.event_title}, ${d.event_venue}, ${d.event_city}, ${d.event_date}, ${d.event_time}, ${d.event_image}
++        ) RETURNING *`;
++    return view(rows[0]);
+ }
+ 
+ /** Marks a pending booking as paid + confirmed. Returns null if not found / not yours. */
+-export function payBooking({ bookingId, userId, method }) {
+-    return withLock(FILE, async () => {
+-        const all = await readJson(FILE, []);
+-        const b = all.find((x) => x.id === bookingId && x.user_id === userId);
+-        if (!b) return null;
+-        if (b.status !== "confirmed") {
+-            const taken = new Set(all.map((x) => x.ticket_code).filter(Boolean));
+-            let code;
+-            do {
+-                code = `BASH-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
+-            } while (taken.has(code));
+-            b.status = "confirmed";
+-            b.ticket_code = code;
+-            b.payment_method = method;
+-            b.paid_at = new Date().toISOString();
+-            await writeJson(FILE, all);
++export async function payBooking({ bookingId, userId, method }) {
++    await ensureReady();
++
++    const found = await sql`SELECT * FROM bookings WHERE id = ${bookingId} AND user_id = ${userId}`;
++    if (!found.length) return null;
++    if (found[0].status === "confirmed") return view(found[0]); // already paid: idempotent
++
++    // ticket_code is UNIQUE, so on the (very unlikely) collision we just try a new code
++    for (let attempt = 0; attempt < 5; attempt++) {
++        const code = `BASH-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
++        try {
++            const rows = await sql`
++                UPDATE bookings
++                   SET status = 'confirmed', ticket_code = ${code},
++                       payment_method = ${method}, paid_at = now()
++                 WHERE id = ${bookingId} AND user_id = ${userId} AND status <> 'confirmed'
++             RETURNING *`;
++            if (rows.length) return view(rows[0]);
++            // someone else confirmed it between our read and update
++            const again = await sql`SELECT * FROM bookings WHERE id = ${bookingId} AND user_id = ${userId}`;
++            return again.length ? view(again[0]) : null;
++        } catch (e) {
++            if (e?.code !== "23505") throw e; // not a unique violation
+         }
+-        return view(b);
+-    });
++    }
++    throw new Error("Could not allocate a ticket code");
+ }
+diff --git a/src/lib/db.js b/src/lib/db.js
+index 5cdabab..4688efa 100644
+--- a/src/lib/db.js
++++ b/src/lib/db.js
+@@ -1,33 +1,108 @@
+-// Tiny JSON-file persistence helpers (server only). Data lives in ./data/*.json.
+-import fs from "fs/promises";
+-import path from "path";
++// Neon Postgres connection (server only).
++// Uses Neon's serverless driver, which talks to Postgres over HTTPS, so it works
++// on Vercel serverless/edge functions with no connection pooling headaches.
++import { neon } from "@neondatabase/serverless";
++import crypto from "crypto";
++import { promisify } from "util";
+ 
+-const DIR = path.join(process.cwd(), "data");
++const scrypt = promisify(crypto.scrypt);
+ 
+-export async function readJson(name, fallback) {
+-    try {
+-        return JSON.parse(await fs.readFile(path.join(DIR, name), "utf8"));
+-    } catch {
+-        return fallback;
++let _sql = null;
++export function getSql() {
++    if (_sql) return _sql;
++    const url = process.env.DATABASE_URL;
++    if (!url) {
++        throw new Error(
++            "DATABASE_URL is not set. Add your Neon connection string to .env.local (and to Vercel env vars).",
++        );
+     }
++    _sql = neon(url);
++    return _sql;
+ }
+ 
+-export async function writeJson(name, value) {
+-    await fs.mkdir(DIR, { recursive: true });
+-    const file = path.join(DIR, name);
+-    const tmp = `${file}.${process.pid}.tmp`;
+-    await fs.writeFile(tmp, JSON.stringify(value, null, 2));
+-    await fs.rename(tmp, file);
+-}
++/** Tagged-template query helper: await sql`select * from users where id = ${id}` */
++export const sql = (strings, ...values) => getSql()(strings, ...values);
++
++/* ---------- schema (idempotent; also available as scripts/schema.sql) ---------- */
++const STATEMENTS = [
++    `CREATE TABLE IF NOT EXISTS users (
++        id            text PRIMARY KEY,
++        name          text NOT NULL,
++        email         text NOT NULL UNIQUE,
++        password_hash text NOT NULL,
++        created_at    timestamptz NOT NULL DEFAULT now()
++    )`,
++    `CREATE TABLE IF NOT EXISTS events (
++        id         text PRIMARY KEY,
++        data       jsonb NOT NULL,
++        created_at timestamptz NOT NULL DEFAULT now()
++    )`,
++    `CREATE TABLE IF NOT EXISTS bookings (
++        id             text PRIMARY KEY,
++        user_id        text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
++        event_id       text NOT NULL,
++        tier           text NOT NULL,
++        quantity       integer NOT NULL,
++        amount         integer NOT NULL,
++        attendee_name  text NOT NULL,
++        attendee_email text NOT NULL,
++        attendee_phone text NOT NULL,
++        id_type        text NOT NULL,
++        id_last4       text NOT NULL,
++        event_title    text,
++        event_venue    text,
++        event_city     text,
++        event_date     text,
++        event_time     text,
++        event_image    text,
++        status         text NOT NULL DEFAULT 'pending',
++        ticket_code    text UNIQUE,
++        payment_method text,
++        paid_at        timestamptz,
++        created_at     timestamptz NOT NULL DEFAULT now()
++    )`,
++    `CREATE INDEX IF NOT EXISTS bookings_user_idx ON bookings (user_id, created_at DESC)`,
++    `CREATE TABLE IF NOT EXISTS login_attempts (
++        email      text NOT NULL,
++        created_at timestamptz NOT NULL DEFAULT now()
++    )`,
++    `CREATE INDEX IF NOT EXISTS login_attempts_idx ON login_attempts (email, created_at)`,
++];
++
++let ready = null;
+ 
+-// One in-process queue per file name so read-modify-write cycles never interleave.
+-const queues = new Map();
+-export function withLock(name, fn) {
+-    const prev = queues.get(name) || Promise.resolve();
+-    const run = prev.then(fn, fn);
+-    queues.set(
+-        name,
+-        run.catch(() => {}),
+-    );
+-    return run;
++/**
++ * Creates tables on first use (once per server instance) and seeds the demo user.
++ * Every store function awaits this, so no manual migration step is required.
++ */
++export function ensureReady() {
++    if (!ready) {
++        ready = (async () => {
++            const q = getSql();
++            for (const stmt of STATEMENTS) {
++                try {
++                    await q.query(stmt);
++                } catch (e) {
++                    // two cold starts racing on CREATE TABLE IF NOT EXISTS: retry once
++                    await q.query(stmt);
++                }
++            }
++            if (process.env.DEMO_USER !== "off") {
++                const existing = await q`SELECT 1 FROM users WHERE email = 'test@bash.in'`;
++                if (existing.length === 0) {
++                    const salt = crypto.randomBytes(16).toString("hex");
++                    const hash = (await scrypt("test1234", salt, 64)).toString("hex");
++                    await q`INSERT INTO users (id, name, email, password_hash)
++                            VALUES (${crypto.randomBytes(12).toString("hex")}, 'Test User', 'test@bash.in', ${salt + ":" + hash})
++                            ON CONFLICT (email) DO NOTHING`;
++                }
++            }
++        })().catch((e) => {
++            ready = null; // let the next request try again
++            throw e;
++        });
++    }
++    return ready;
+ }
++
++export const STATEMENTS_SQL = STATEMENTS.map((s) => s + ";").join("\n\n");
+diff --git a/src/lib/eventStore.js b/src/lib/eventStore.js
+index 1d5d380..603ba98 100644
+--- a/src/lib/eventStore.js
++++ b/src/lib/eventStore.js
+@@ -1,29 +1,28 @@
+ // Server-only event store.
+-// Seed events live in src/data/seedEvents.js; events created through the app are
+-// persisted to data/created-events.json (needs a writable disk, i.e. `next dev` or
+-// `next start` on a normal server; swap this file for a database on serverless hosts).
+-import fs from "fs/promises";
+-import path from "path";
++// Seed events live in src/data/seedEvents.js (static, shipped with the build).
++// Events created through the app are stored in Neon (table: events, jsonb data).
+ import crypto from "crypto";
+ import { seedEvents } from "@/data/seedEvents";
+-import { withLock } from "@/lib/db";
+-
+-const DIR = path.join(process.cwd(), "data");
+-const FILE = path.join(DIR, "created-events.json");
++import { sql, ensureReady } from "@/lib/db";
+ 
+ async function readCreated() {
+-    try {
+-        const parsed = JSON.parse(await fs.readFile(FILE, "utf8"));
+-        return Array.isArray(parsed) ? parsed : [];
+-    } catch {
+-        return [];
+-    }
++    await ensureReady();
++    const rows = await sql`SELECT id, data, created_at FROM events ORDER BY created_at DESC`;
++    return rows.map((r) => ({
++        ...r.data,
++        id: r.id,
++        created_at: new Date(r.created_at).toISOString(),
++    }));
+ }
+ 
+ export async function listEvents({ city, genre, q } = {}) {
+-    const created = await readCreated();
+     // newest created events first, then the seed events
+-    let events = [...created.reverse(), ...seedEvents];
++    // If the database is unreachable (bad/missing DATABASE_URL), still show the seed events.
++    const created = await readCreated().catch((e) => {
++        console.error("listEvents: could not read created events from Neon:", e.message);
++        return [];
++    });
++    let events = [...created, ...seedEvents];
+ 
+     if (city && city !== "all") events = events.filter((e) => e.city_slug === city);
+     if (genre && genre !== "all") events = events.filter((e) => e.genre_slug === genre);
+@@ -40,23 +39,20 @@ export async function listEvents({ city, genre, q } = {}) {
+ }
+ 
+ export async function getEvent(id) {
+-    const all = await listEvents();
+-    return all.find((e) => e.id === id) || null;
++    const seeded = seedEvents.find((e) => e.id === id);
++    if (seeded) return seeded;
++    await ensureReady();
++    const rows = await sql`SELECT id, data, created_at FROM events WHERE id = ${id}`;
++    if (!rows.length) return null;
++    const r = rows[0];
++    return { ...r.data, id: r.id, created_at: new Date(r.created_at).toISOString() };
+ }
+ 
+-export function createEvent(data) {
+-    return withLock("created-events", async () => {
+-        const event = {
+-            ...data,
+-            id: crypto.randomBytes(12).toString("hex"),
+-            created_at: new Date().toISOString(),
+-        };
+-        const created = await readCreated();
+-        created.push(event);
+-        await fs.mkdir(DIR, { recursive: true });
+-        const tmp = `${FILE}.${process.pid}.tmp`;
+-        await fs.writeFile(tmp, JSON.stringify(created, null, 2));
+-        await fs.rename(tmp, FILE);
+-        return event;
+-    });
++export async function createEvent(data) {
++    await ensureReady();
++    const id = crypto.randomBytes(12).toString("hex");
++    const rows = await sql`
++        INSERT INTO events (id, data) VALUES (${id}, ${JSON.stringify(data)}::jsonb)
++        RETURNING created_at`;
++    return { ...data, id, created_at: new Date(rows[0].created_at).toISOString() };
+ }
