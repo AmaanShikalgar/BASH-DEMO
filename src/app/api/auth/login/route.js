@@ -16,7 +16,7 @@ export async function POST(req) {
     const email = String(body.email ?? "").trim().toLowerCase().slice(0, 200);
     const password = String(body.password ?? "").slice(0, 200);
 
-    if (isThrottled(email)) {
+    if (await isThrottled(email)) {
         return NextResponse.json(
             { detail: "Too many failed attempts. Try again in a few minutes." },
             { status: 429 },
@@ -26,10 +26,10 @@ export async function POST(req) {
     const user = email ? await findUserByEmail(email) : null;
     const ok = user && (await verifyPassword(password, user.password_hash));
     if (!ok) {
-        recordFailure(email);
+        await recordFailure(email);
         return NextResponse.json({ detail: "Invalid email or password" }, { status: 401 });
     }
 
-    clearFailures(email);
+    await clearFailures(email);
     return NextResponse.json({ token: await signToken(user.id), user: publicUser(user) });
 }

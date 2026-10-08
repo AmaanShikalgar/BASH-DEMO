@@ -1,26 +1,20 @@
-// Server-only auth: users in data/users.json, scrypt password hashes, signed tokens.
+// Server-only auth: users in Neon (table: users), scrypt password hashes, signed tokens.
 import crypto from "crypto";
 import { promisify } from "util";
-import { readJson, writeJson, withLock } from "@/lib/db";
+import { sql, ensureReady } from "@/lib/db";
 
 const scrypt = promisify(crypto.scrypt);
-const USERS = "users.json";
 const TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 /* ---------- secret ---------- */
-let cachedSecret = null;
-async function getSecret() {
+// Set AUTH_SECRET in Vercel (e.g. `openssl rand -hex 32`). Serverless has no persistent
+// disk, so there is no file fallback; local dev uses a fixed insecure secret.
+function getSecret() {
     if (process.env.AUTH_SECRET) return process.env.AUTH_SECRET;
-    if (cachedSecret) return cachedSecret;
-    return withLock("auth-secret", async () => {
-        let stored = await readJson("auth-secret.json", null);
-        if (!stored?.secret) {
-            stored = { secret: crypto.randomBytes(32).toString("hex") };
-            await writeJson("auth-secret.json", stored);
-        }
-        cachedSecret = stored.secret;
-        return cachedSecret;
-    });
+    if (process.env.NODE_ENV === "production") {
+        throw new Error("AUTH_SECRET is not set. Add it to your Vercel environment variables.");
+    }
+    return "dev-only-insecure-secret";
 }
 
 /* ---------- passwords ---------- */
@@ -43,14 +37,14 @@ const b64 = (buf) => Buffer.from(buf).toString("base64url");
 
 export async function signToken(userId) {
     const body = b64(JSON.stringify({ sub: userId, exp: Date.now() + TOKEN_TTL_MS }));
-    const sig = crypto.createHmac("sha256", await getSecret()).update(body).digest("base64url");
+    const sig = crypto.createHmac("sha256", getSecret()).update(body).digest("base64url");
     return `${body}.${sig}`;
 }
 
 async function verifyToken(token) {
     const [body, sig] = String(token).split(".");
     if (!body || !sig) return null;
-    const expected = crypto.createHmac("sha256", await getSecret()).update(body).digest("base64url");
+    const expected = crypto.createHmac("sha256", getSecret()).update(body).digest("base64url");
     const a = Buffer.from(sig);
     const b = Buffer.from(expected);
     if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
@@ -65,56 +59,21 @@ async function verifyToken(token) {
 /* ---------- users ---------- */
 export const publicUser = (u) => ({ id: u.id, name: u.name, email: u.email });
 
-// Demo account matching the prefilled login form (test@bash.in / test1234).
-// Set DEMO_USER=off in your environment to skip creating it.
-let seeding = null;
-function seedOnce() {
-    if (!seeding) {
-        seeding = withLock(USERS, async () => {
-            if (process.env.DEMO_USER === "off") return;
-            const users = await readJson(USERS, []);
-            if (users.some((u) => u.email === "test@bash.in")) return;
-            users.push({
-                id: crypto.randomBytes(12).toString("hex"),
-                name: "Test User",
-                email: "test@bash.in",
-                password_hash: await hashPassword("test1234"),
-                created_at: new Date().toISOString(),
-            });
-            await writeJson(USERS, users);
-        }).catch((e) => {
-            seeding = null;
-            throw e;
-        });
-    }
-    return seeding;
+export async function findUserByEmail(email) {
+    await ensureReady();
+    const rows = await sql`SELECT * FROM users WHERE email = ${String(email).trim().toLowerCase()}`;
+    return rows[0] || null;
 }
-
-async function loadUsers() {
-    await seedOnce();
-    return readJson(USERS, []);
-}
-
-export const findUserByEmail = async (email) =>
-    (await loadUsers()).find((u) => u.email === String(email).trim().toLowerCase()) || null;
 
 export async function createUser({ name, email, password }) {
-    await seedOnce(); // must run before taking the lock below
-    return withLock(USERS, async () => {
-        const users = await readJson(USERS, []);
-        const clean = String(email).trim().toLowerCase();
-        if (users.some((u) => u.email === clean)) return null; // already registered
-        const user = {
-            id: crypto.randomBytes(12).toString("hex"),
-            name: String(name).trim(),
-            email: clean,
-            password_hash: await hashPassword(password),
-            created_at: new Date().toISOString(),
-        };
-        users.push(user);
-        await writeJson(USERS, users);
-        return user;
-    });
+    await ensureReady();
+    const clean = String(email).trim().toLowerCase();
+    const rows = await sql`
+        INSERT INTO users (id, name, email, password_hash)
+        VALUES (${crypto.randomBytes(12).toString("hex")}, ${String(name).trim()}, ${clean}, ${await hashPassword(password)})
+        ON CONFLICT (email) DO NOTHING
+        RETURNING *`;
+    return rows[0] || null; // null = already registered
 }
 
 /** Reads "Authorization: Bearer <token>" and returns the user, or null. */
@@ -124,25 +83,25 @@ export async function getUserFromRequest(req) {
     if (!token) return null;
     const payload = await verifyToken(token);
     if (!payload) return null;
-    const users = await loadUsers();
-    return users.find((u) => u.id === payload.sub) || null;
+    await ensureReady();
+    const rows = await sql`SELECT * FROM users WHERE id = ${payload.sub}`;
+    return rows[0] || null;
 }
 
-/* ---------- login throttle (in memory): 5 failures / 10 min per email ---------- */
-const failures = new Map();
-const WINDOW = 10 * 60 * 1000;
-export function isThrottled(email) {
-    const rec = failures.get(email);
-    if (!rec) return false;
-    if (Date.now() - rec.first > WINDOW) {
-        failures.delete(email);
-        return false;
-    }
-    return rec.count >= 5;
+/* ---------- login throttle (stored in Neon so it works across serverless instances) ---------- */
+// 5 failures / 10 min per email
+export async function isThrottled(email) {
+    await ensureReady();
+    const rows = await sql`
+        SELECT count(*)::int AS n FROM login_attempts
+         WHERE email = ${email} AND created_at > now() - interval '10 minutes'`;
+    return rows[0].n >= 5;
 }
-export function recordFailure(email) {
-    const rec = failures.get(email);
-    if (!rec || Date.now() - rec.first > WINDOW) failures.set(email, { count: 1, first: Date.now() });
-    else rec.count += 1;
+export async function recordFailure(email) {
+    await ensureReady();
+    await sql`INSERT INTO login_attempts (email) VALUES (${email})`;
 }
-export const clearFailures = (email) => failures.delete(email);
+export async function clearFailures(email) {
+    await ensureReady();
+    await sql`DELETE FROM login_attempts WHERE email = ${email}`;
+}

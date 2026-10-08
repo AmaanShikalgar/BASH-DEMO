@@ -2,17 +2,25 @@
 
 Next.js 14 (App Router) port of the "Bash" ticket-booking frontend that was originally a Create React App build.
 
-## Run
+## Run locally
 
 ```bash
 npm install
-cp .env.example .env     # optional; set BACKEND_URL if your API lives elsewhere
-npm run dev              # http://localhost:3000
+cp .env.example .env.local   # fill in DATABASE_URL and AUTH_SECRET
+npm run dev                  # http://localhost:3000
 ```
 
-The app expects the original FastAPI backend (`/api/events`, `/api/auth/*`, `/api/bookings/*`).
-Browser calls go to `/api/*` on this app, and `next.config.js` proxies them to `BACKEND_URL`
-(defaults to the original preview URL, which may expire).
+## Database (Neon Postgres)
+
+Users, user-created events, bookings and login-throttle data live in Neon. Seed events stay in `src/data/seedEvents.js`.
+Tables are created automatically on the first request; `scripts/schema.sql` (or `npm run db:setup`) does the same by hand.
+
+## Deploy to Vercel
+
+1. Push the repo to GitHub and import it in Vercel.
+2. Add the Neon integration (Vercel > Storage > Neon, or Marketplace). It injects `DATABASE_URL` for you.
+3. Add `AUTH_SECRET` (`openssl rand -hex 32`) under Project Settings > Environment Variables.
+4. Deploy. Log in with `test@bash.in` / `test1234` (set `DEMO_USER=off` to disable this account).
 
 ## Routes
 

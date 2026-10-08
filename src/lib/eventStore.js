@@ -1,29 +1,23 @@
 // Server-only event store.
-// Seed events live in src/data/seedEvents.js; events created through the app are
-// persisted to data/created-events.json (needs a writable disk, i.e. `next dev` or
-// `next start` on a normal server; swap this file for a database on serverless hosts).
-import fs from "fs/promises";
-import path from "path";
+// Seed events live in src/data/seedEvents.js (static, shipped with the build).
+// Events created through the app are stored in Neon (table: events, jsonb data).
 import crypto from "crypto";
 import { seedEvents } from "@/data/seedEvents";
-import { withLock } from "@/lib/db";
-
-const DIR = path.join(process.cwd(), "data");
-const FILE = path.join(DIR, "created-events.json");
+import { sql, ensureReady } from "@/lib/db";
 
 async function readCreated() {
-    try {
-        const parsed = JSON.parse(await fs.readFile(FILE, "utf8"));
-        return Array.isArray(parsed) ? parsed : [];
-    } catch {
-        return [];
-    }
+    await ensureReady();
+    const rows = await sql`SELECT id, data, created_at FROM events ORDER BY created_at DESC`;
+    return rows.map((r) => ({
+        ...r.data,
+        id: r.id,
+        created_at: new Date(r.created_at).toISOString(),
+    }));
 }
 
 export async function listEvents({ city, genre, q } = {}) {
-    const created = await readCreated();
     // newest created events first, then the seed events
-    let events = [...created.reverse(), ...seedEvents];
+    let events = [...(await readCreated()), ...seedEvents];
 
     if (city && city !== "all") events = events.filter((e) => e.city_slug === city);
     if (genre && genre !== "all") events = events.filter((e) => e.genre_slug === genre);
@@ -40,23 +34,20 @@ export async function listEvents({ city, genre, q } = {}) {
 }
 
 export async function getEvent(id) {
-    const all = await listEvents();
-    return all.find((e) => e.id === id) || null;
+    const seeded = seedEvents.find((e) => e.id === id);
+    if (seeded) return seeded;
+    await ensureReady();
+    const rows = await sql`SELECT id, data, created_at FROM events WHERE id = ${id}`;
+    if (!rows.length) return null;
+    const r = rows[0];
+    return { ...r.data, id: r.id, created_at: new Date(r.created_at).toISOString() };
 }
 
-export function createEvent(data) {
-    return withLock("created-events", async () => {
-        const event = {
-            ...data,
-            id: crypto.randomBytes(12).toString("hex"),
-            created_at: new Date().toISOString(),
-        };
-        const created = await readCreated();
-        created.push(event);
-        await fs.mkdir(DIR, { recursive: true });
-        const tmp = `${FILE}.${process.pid}.tmp`;
-        await fs.writeFile(tmp, JSON.stringify(created, null, 2));
-        await fs.rename(tmp, FILE);
-        return event;
-    });
+export async function createEvent(data) {
+    await ensureReady();
+    const id = crypto.randomBytes(12).toString("hex");
+    const rows = await sql`
+        INSERT INTO events (id, data) VALUES (${id}, ${JSON.stringify(data)}::jsonb)
+        RETURNING created_at`;
+    return { ...data, id, created_at: new Date(rows[0].created_at).toISOString() };
 }
