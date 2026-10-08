@@ -16,7 +16,9 @@ export function getSql() {
             "DATABASE_URL is not set. Add your Neon connection string to .env.local (and to Vercel env vars).",
         );
     }
-    _sql = neon(url);
+    // Next.js 14 caches server-side fetch() calls, and the Neon HTTP driver uses fetch,
+    // so identical queries could return stale results. Always bypass that cache.
+    _sql = neon(url, { fetchOptions: { cache: "no-store" } });
     return _sql;
 }
 
