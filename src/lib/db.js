@@ -23,6 +23,9 @@ export function getSql() {
 /** Tagged-template query helper: await sql`select * from users where id = ${id}` */
 export const sql = (strings, ...values) => getSql()(strings, ...values);
 
+// Run a plain SQL string. Newer driver versions (1.x) use sql.query(); 0.x calls sql(string) directly.
+const run = (q, text) => (typeof q.query === "function" ? q.query(text) : q(text));
+
 /* ---------- schema (idempotent; also available as scripts/schema.sql) ---------- */
 const STATEMENTS = [
     `CREATE TABLE IF NOT EXISTS users (
@@ -81,10 +84,10 @@ export function ensureReady() {
             const q = getSql();
             for (const stmt of STATEMENTS) {
                 try {
-                    await q.query(stmt);
+                    await run(q, stmt);
                 } catch (e) {
                     // two cold starts racing on CREATE TABLE IF NOT EXISTS: retry once
-                    await q.query(stmt);
+                    await run(q, stmt);
                 }
             }
             if (process.env.DEMO_USER !== "off") {

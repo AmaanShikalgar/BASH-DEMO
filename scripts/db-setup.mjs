@@ -13,5 +13,5 @@ const statements = fs
     .split(/;\s*\n/)
     .map((s) => s.replace(/^--.*$/gm, "").trim())
     .filter(Boolean);
-for (const s of statements) await sql.query(s);
+for (const s of statements) await (typeof sql.query === "function" ? sql.query(s) : sql(s));
 console.log(`Done: ran ${statements.length} statements.`);

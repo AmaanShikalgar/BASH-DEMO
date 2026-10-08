@@ -1,0 +1,38 @@
+diff --git a/scripts/db-setup.mjs b/scripts/db-setup.mjs
+index 8ae67c4..961b86b 100644
+--- a/scripts/db-setup.mjs
++++ b/scripts/db-setup.mjs
+@@ -13,5 +13,5 @@ const statements = fs
+     .split(/;\s*\n/)
+     .map((s) => s.replace(/^--.*$/gm, "").trim())
+     .filter(Boolean);
+-for (const s of statements) await sql.query(s);
++for (const s of statements) await (typeof sql.query === "function" ? sql.query(s) : sql(s));
+ console.log(`Done: ran ${statements.length} statements.`);
+diff --git a/src/lib/db.js b/src/lib/db.js
+index 4688efa..0f506a8 100644
+--- a/src/lib/db.js
++++ b/src/lib/db.js
+@@ -23,6 +23,9 @@ export function getSql() {
+ /** Tagged-template query helper: await sql`select * from users where id = ${id}` */
+ export const sql = (strings, ...values) => getSql()(strings, ...values);
+ 
++// Run a plain SQL string. Newer driver versions (1.x) use sql.query(); 0.x calls sql(string) directly.
++const run = (q, text) => (typeof q.query === "function" ? q.query(text) : q(text));
++
+ /* ---------- schema (idempotent; also available as scripts/schema.sql) ---------- */
+ const STATEMENTS = [
+     `CREATE TABLE IF NOT EXISTS users (
+@@ -81,10 +84,10 @@ export function ensureReady() {
+             const q = getSql();
+             for (const stmt of STATEMENTS) {
+                 try {
+-                    await q.query(stmt);
++                    await run(q, stmt);
+                 } catch (e) {
+                     // two cold starts racing on CREATE TABLE IF NOT EXISTS: retry once
+-                    await q.query(stmt);
++                    await run(q, stmt);
+                 }
+             }
+             if (process.env.DEMO_USER !== "off") {
