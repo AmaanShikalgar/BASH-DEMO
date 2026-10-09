@@ -1,9 +1,21 @@
 import { NextResponse } from "next/server";
 import { createUser, publicUser, signToken } from "@/lib/auth";
+import { CITIES } from "@/lib/geo";
+import { updateInstagram } from "@/lib/profileStore";
 
 export const dynamic = "force-dynamic";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function ageFrom(dob) {
+    const d = new Date(dob);
+    if (isNaN(d)) return 0;
+    const n = new Date();
+    let a = n.getFullYear() - d.getFullYear();
+    const m = n.getMonth() - d.getMonth();
+    if (m < 0 || (m === 0 && n.getDate() < d.getDate())) a--;
+    return a;
+}
 
 async function handle(req) {
     const body = await req.json().catch(() => ({}));
@@ -16,8 +28,26 @@ async function handle(req) {
     if (password.length < 6 || password.length > 200)
         return NextResponse.json({ detail: "Password must be at least 6 characters" }, { status: 422 });
 
-    const user = await createUser({ name, email, password });
+    const phone = String(body.phone ?? "").replace(/[\s-]/g, "").slice(0, 15);
+    const city = String(body.city ?? "").trim();
+    const dob = String(body.dob ?? "").slice(0, 10);
+    const instagram = String(body.instagram ?? "").trim().replace(/^@/, "").slice(0, 30);
+
+    if (!/^(\+91)?[6-9]\d{9}$/.test(phone))
+        return NextResponse.json({ detail: "Enter a valid 10-digit mobile number" }, { status: 422 });
+    if (!CITIES.some((c) => c.slug === city))
+        return NextResponse.json({ detail: "Choose your city" }, { status: 422 });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dob) || ageFrom(dob) < 18)
+        return NextResponse.json({ detail: "You must be 18 or older to sign up" }, { status: 422 });
+
+    const user = await createUser({ name, email, password, phone, city, dob });
     if (!user) return NextResponse.json({ detail: "This email is already registered" }, { status: 409 });
+
+    if (instagram) {
+        try {
+            await updateInstagram(user.id, instagram);
+        } catch {}
+    }
 
     return NextResponse.json({ token: await signToken(user.id), user: publicUser(user) });
 }

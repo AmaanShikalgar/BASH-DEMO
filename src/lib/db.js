@@ -46,6 +46,9 @@ const STATEMENTS = [
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS instagram text`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS photo_top text`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS photo_side text`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS phone text`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS city text`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS dob date`,
     `CREATE TABLE IF NOT EXISTS events (
         id         text PRIMARY KEY,
         data       jsonb NOT NULL,

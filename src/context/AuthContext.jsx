@@ -28,11 +28,12 @@ export const AuthProvider = ({ children }) => {
         return data.user;
     };
 
-    const register = async (name, email, password) => {
+    const register = async (name, email, password, extra = {}) => {
         const { data } = await api.post("/auth/register", {
             name,
             email,
             password,
+            ...extra,
         });
         localStorage.setItem("bash_token", data.token);
         setUser(data.user);

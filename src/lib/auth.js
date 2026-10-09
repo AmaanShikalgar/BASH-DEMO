@@ -72,13 +72,13 @@ export async function findUserByEmail(email) {
     return rows[0] || null;
 }
 
-export async function createUser({ name, email, password, role = "user", club_id = null }) {
+export async function createUser({ name, email, password, role = "user", club_id = null, phone = null, city = null, dob = null }) {
     await ensureReady();
     const clean = String(email).trim().toLowerCase();
     const rows = await sql`
-        INSERT INTO users (id, name, email, password_hash, role, club_id, bash_id)
+        INSERT INTO users (id, name, email, password_hash, role, club_id, bash_id, phone, city, dob)
         VALUES (${crypto.randomBytes(12).toString("hex")}, ${String(name).trim()}, ${clean},
-                ${await hashPassword(password)}, ${role}, ${club_id}, ${newBashId()})
+                ${await hashPassword(password)}, ${role}, ${club_id}, ${newBashId()}, ${phone}, ${city}, ${dob})
         ON CONFLICT (email) DO NOTHING
         RETURNING *`;
     return rows[0] || null; // null = already registered
