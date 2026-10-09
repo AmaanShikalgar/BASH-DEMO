@@ -5,6 +5,7 @@ import { neon } from "@neondatabase/serverless";
 import crypto from "crypto";
 import { promisify } from "util";
 import { seedClubs } from "@/data/seedClubs";
+import { newBashId } from "@/lib/bashId";
 
 const scrypt = promisify(crypto.scrypt);
 
@@ -40,6 +41,11 @@ const STATEMENTS = [
     )`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS role text NOT NULL DEFAULT 'user'`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS club_id text`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS bash_id text`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS users_bash_id_key ON users (bash_id)`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS instagram text`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS photo_top text`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS photo_side text`,
     `CREATE TABLE IF NOT EXISTS events (
         id         text PRIMARY KEY,
         data       jsonb NOT NULL,
@@ -84,6 +90,28 @@ const STATEMENTS = [
     `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS transferred_from text`,
     `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS used_at timestamptz`,
     `CREATE INDEX IF NOT EXISTS bookings_club_idx ON bookings (club_id, created_at DESC)`,
+    // Club onboarding: application details (one row per club), and uploaded documents.
+    `CREATE TABLE IF NOT EXISTS club_applications (
+        club_id       text PRIMARY KEY,
+        data          jsonb NOT NULL,
+        status        text NOT NULL DEFAULT 'pending_documents',
+        reviewer_note text,
+        created_at    timestamptz NOT NULL DEFAULT now(),
+        updated_at    timestamptz NOT NULL DEFAULT now(),
+        decided_at    timestamptz
+    )`,
+    `CREATE TABLE IF NOT EXISTS club_documents (
+        id            text PRIMARY KEY,
+        club_id       text NOT NULL,
+        kind          text NOT NULL,
+        file_name     text,
+        mime          text NOT NULL,
+        data          text NOT NULL,
+        status        text NOT NULL DEFAULT 'pending',
+        reviewer_note text,
+        uploaded_at   timestamptz NOT NULL DEFAULT now()
+    )`,
+    `CREATE INDEX IF NOT EXISTS club_documents_club_idx ON club_documents (club_id)`,
     // Flyers and other public images (served by /api/assets/[id])
     `CREATE TABLE IF NOT EXISTS assets (
         id         text PRIMARY KEY,
@@ -111,6 +139,12 @@ const STATEMENTS = [
         scanned_at   timestamptz NOT NULL DEFAULT now()
     )`,
     `CREATE INDEX IF NOT EXISTS scan_logs_club_idx ON scan_logs (club_id, scanned_at DESC)`,
+    `ALTER TABLE scan_logs ADD COLUMN IF NOT EXISTS attendee_name text`,
+    `ALTER TABLE scan_logs ADD COLUMN IF NOT EXISTS attendee_phone text`,
+    `ALTER TABLE scan_logs ADD COLUMN IF NOT EXISTS event_title text`,
+    `ALTER TABLE scan_logs ADD COLUMN IF NOT EXISTS tier text`,
+    `ALTER TABLE scan_logs ADD COLUMN IF NOT EXISTS quantity integer`,
+    `ALTER TABLE scan_logs ADD COLUMN IF NOT EXISTS decided_at timestamptz`,
     `CREATE TABLE IF NOT EXISTS email_logs (
         id         text PRIMARY KEY,
         booking_id text,
@@ -164,6 +198,21 @@ async function migrateOnce(q, name, fn) {
     await q`INSERT INTO schema_migrations (name) VALUES (${name}) ON CONFLICT DO NOTHING`;
 }
 
+// Gives every user without a Bash ID one (existing users, demo accounts).
+async function backfillBashIds(q) {
+    const missing = await q`SELECT id FROM users WHERE bash_id IS NULL`;
+    for (const row of missing) {
+        for (let attempt = 0; attempt < 5; attempt++) {
+            try {
+                await q`UPDATE users SET bash_id = ${newBashId()} WHERE id = ${row.id} AND bash_id IS NULL`;
+                break;
+            } catch (e) {
+                if (e?.code !== "23505") throw e; // collision: try another ID
+            }
+        }
+    }
+}
+
 let ready = null;
 
 /**
@@ -206,6 +255,7 @@ export function ensureReady() {
                             ON CONFLICT (email) DO NOTHING`;
                 }
             }
+            await backfillBashIds(q);
         })().catch((e) => {
             ready = null; // let the next request try again
             throw e;

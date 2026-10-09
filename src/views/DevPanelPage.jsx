@@ -9,12 +9,14 @@ import { Card, Field, Btn, Badge, Tabs, Empty, inputCls, fmtDateTime } from "@/c
 import { api, formatErr, inr } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { CITIES } from "@/lib/geo";
+import ClubOnboarding from "@/components/ClubOnboarding";
 
 const TABS = [
     { id: "overview", label: "Overview" },
     { id: "clubs", label: "Clubs" },
     { id: "users", label: "Users & roles" },
     { id: "bookings", label: "All bookings" },
+    { id: "scans", label: "QR scans" },
     { id: "gateways", label: "Payment gateways" },
 ];
 
@@ -66,6 +68,7 @@ export default function DevPanelPage() {
                     {tab === "clubs" && <ClubsTab />}
                     {tab === "users" && <UsersTab />}
                     {tab === "bookings" && <BookingsTab />}
+                    {tab === "scans" && <ScansTab />}
                     {tab === "gateways" && <GatewaysTab />}
                 </div>
             </div>
@@ -173,7 +176,9 @@ function ClubsTab() {
 
     return (
         <div className="space-y-5">
-            <Card title="Add a club" subtitle="Club admins are linked to a club from the Users & roles tab.">
+            <ClubOnboarding onChanged={load} />
+
+            <Card title="Add a club" subtitle="Quick add without documents. Use Club applications above for a full onboarding.">
                 <form onSubmit={create} className="grid md:grid-cols-[1.5fr_1fr_2fr_1fr_auto] gap-3 items-end" data-testid="new-club-form">
                     <input className={inputCls} placeholder="Club name" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
                     <select className={inputCls} value={form.city_slug} onChange={(e) => setForm({ ...form, city_slug: e.target.value })}>
@@ -226,6 +231,9 @@ function ClubCardDetail({ club: c, onSaved }) {
                         <h3 className="font-display text-xl font-semibold">{c.name}</h3>
                         {c.seeded && <Badge>Built-in</Badge>}
                         <Badge tone={c.is_active ? "green" : "red"}>{c.is_active ? "Active" : "Inactive"}</Badge>
+                        {c.verification_status && c.verification_status !== "approved" && (
+                            <Badge tone="amber">{c.verification_status === "rejected" ? "Rejected" : "Documents pending"}</Badge>
+                        )}
                     </div>
                     <div className="font-body text-xs text-white/50 mt-1">
                         {c.city} · {c.address}
@@ -483,6 +491,120 @@ function GatewayRow({ gw, onSaved }) {
             <Btn variant="primary" onClick={save}>
                 <Save className="w-4 h-4" /> Save
             </Btn>
+        </div>
+    );
+}
+
+/* ---------------------------- QR scans ---------------------------- */
+
+const SCAN_TONE = {
+    admitted: "green",
+    scanned: "grey",
+    already_used: "amber",
+    declined: "red",
+    not_approved: "red",
+    invalid: "red",
+};
+
+const SCAN_LABEL = {
+    admitted: "Admitted",
+    scanned: "Scanned, no decision",
+    already_used: "Already used",
+    declined: "Declined",
+    not_approved: "Not approved",
+    invalid: "Invalid",
+};
+
+function ScansTab() {
+    const [rows, setRows] = useState([]);
+    const [clubs, setClubs] = useState({});
+    const [loading, setLoading] = useState(true);
+    const [filter, setFilter] = useState("all");
+
+    const load = useCallback(() => {
+        setLoading(true);
+        return Promise.all([api.get("/dev/scans"), api.get("/dev/clubs")])
+            .then(([s, c]) => {
+                setRows(s.data);
+                setClubs(Object.fromEntries(c.data.map((x) => [x.id, x.name])));
+            })
+            .catch((e) => toast.error(errorText(e)))
+            .finally(() => setLoading(false));
+    }, []);
+
+    useEffect(() => {
+        load();
+    }, [load]);
+
+    const counts = rows.reduce((m, r) => ((m[r.result] = (m[r.result] || 0) + 1), m), {});
+    const shown = filter === "all" ? rows : rows.filter((r) => r.result === filter);
+
+    return (
+        <div className="space-y-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <Stat label="Total scans" value={rows.length} />
+                <Stat label="Admitted" value={counts.admitted || 0} />
+                <Stat label="Declined" value={counts.declined || 0} />
+                <Stat label="Problems" value={(counts.already_used || 0) + (counts.not_approved || 0) + (counts.invalid || 0)} />
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+                {["all", "admitted", "scanned", "declined", "already_used", "not_approved", "invalid"].map((k) => (
+                    <button
+                        key={k}
+                        type="button"
+                        onClick={() => setFilter(k)}
+                        className={`rounded-full px-3 py-1.5 font-body text-xs border ${filter === k ? "bg-white text-black border-white" : "bg-white/5 text-white/70 border-white/10"}`}
+                    >
+                        {k === "all" ? "All" : SCAN_LABEL[k]}
+                    </button>
+                ))}
+                <div className="flex-1" />
+                <Btn onClick={load} aria-label="Refresh scans">
+                    <RefreshCw className="w-4 h-4" /> Refresh
+                </Btn>
+            </div>
+
+            {loading ? (
+                <div className="text-white/50 font-body">Loading…</div>
+            ) : shown.length === 0 ? (
+                <Empty>No scans match this filter.</Empty>
+            ) : (
+                <div className="rounded-2xl border border-white/10 overflow-x-auto" data-testid="dev-scan-table">
+                    <table className="w-full text-left font-body text-xs md:text-sm">
+                        <thead className="text-[11px] uppercase tracking-widest text-white/40 bg-white/5">
+                            <tr>
+                                <th className="p-3">Scanned</th>
+                                <th className="p-3">Result</th>
+                                <th className="p-3">Guest</th>
+                                <th className="p-3">Phone</th>
+                                <th className="p-3">Ticket</th>
+                                <th className="p-3">Event</th>
+                                <th className="p-3">Club</th>
+                                <th className="p-3">Gate staff</th>
+                                <th className="p-3">Decided</th>
+                                <th className="p-3">Note</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {shown.map((r) => (
+                                <tr key={r.id} className="border-t border-white/5" data-testid={`dev-scan-${r.id}`}>
+                                    <td className="p-3 whitespace-nowrap text-white/60">{fmtDateTime(r.scanned_at)}</td>
+                                    <td className="p-3"><Badge tone={SCAN_TONE[r.result] || "grey"}>{SCAN_LABEL[r.result] || r.result}</Badge></td>
+                                    <td className="p-3">{r.attendee_name || "—"}</td>
+                                    <td className="p-3">{r.attendee_phone || "—"}</td>
+                                    <td className="p-3 font-mono">{r.ticket_code || "—"}</td>
+                                    <td className="p-3">{r.event_title || "—"}</td>
+                                    <td className="p-3">{clubs[r.club_id] || r.club_id || "—"}</td>
+                                    <td className="p-3">{r.gate_name || "—"}</td>
+                                    <td className="p-3 whitespace-nowrap text-white/60">{r.decided_at ? fmtDateTime(r.decided_at) : "—"}</td>
+                                    <td className="p-3 text-white/60">{r.reason || "—"}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            )}
         </div>
     );
 }
