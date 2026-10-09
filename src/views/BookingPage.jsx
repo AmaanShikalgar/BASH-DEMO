@@ -43,6 +43,33 @@ export default function BookingPage() {
 
     const [bookingId, setBookingId] = useState(null);
     const [payMethod, setPayMethod] = useState("upi");
+    const [idPhoto, setIdPhoto] = useState(null);
+    const [photoErr, setPhotoErr] = useState("");
+    const bookingType = event?.booking_type || "non_exclusive";
+    const needsPhoto = bookingType !== "non_exclusive";
+    const BOOKING_NOTE = {
+        guestlist: "Guestlist request. It is free and the club reviews it before a ticket is issued.",
+        exclusive: "Exclusive booking. The club reviews your booking after payment. If it is declined you are refunded.",
+    };
+
+    const onPhoto = (file) => {
+        setPhotoErr("");
+        if (!file) {
+            setIdPhoto(null);
+            return;
+        }
+        if (!/^image\/(jpeg|png|webp)$/.test(file.type)) {
+            setPhotoErr("Upload a JPG, PNG or WebP photo");
+            return;
+        }
+        if (file.size > 2 * 1024 * 1024) {
+            setPhotoErr("Photo must be under 2 MB");
+            return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => setIdPhoto(reader.result);
+        reader.readAsDataURL(file);
+    };
 
     useEffect(() => {
         api.get(`/events/${id}`).then((r) => setEvent(r.data));
@@ -57,7 +84,7 @@ export default function BookingPage() {
     const tier = event.tiers.find(
         (t) => t.name.toLowerCase() === tierName.toLowerCase(),
     );
-    const amount = (tier?.price || 0) * form.quantity;
+    const amount = bookingType === "guestlist" ? 0 : (tier?.price || 0) * form.quantity;
 
     const next = () => {
         setErr("");
@@ -76,6 +103,10 @@ export default function BookingPage() {
             }
             setStep(1);
         } else if (step === 1) {
+            if (needsPhoto && !idPhoto) {
+                setErr("Upload a photo of your ID for this booking");
+                return;
+            }
             const clean = form.id_number.replace(/\s|-/g, "");
             if (form.id_type === "Aadhaar") {
                 if (!/^\d{12}$/.test(clean)) {
@@ -103,6 +134,7 @@ export default function BookingPage() {
                 attendee_email: form.attendee_email,
                 id_type: form.id_type,
                 id_number: form.id_number,
+                id_photo: idPhoto,
             });
             setBookingId(data.id);
             setStep(2);
@@ -201,6 +233,15 @@ export default function BookingPage() {
                         </div>
                     </div>
                 </div>
+
+                {BOOKING_NOTE[bookingType] && (
+                    <div
+                        data-testid="booking-type-note"
+                        className="rounded-2xl bg-purple-500/10 border border-purple-400/20 p-4 mb-6 font-body text-sm text-white/80"
+                    >
+                        {BOOKING_NOTE[bookingType]}
+                    </div>
+                )}
 
                 {/* Step bodies */}
                 <AnimatePresence mode="wait">
@@ -332,6 +373,24 @@ export default function BookingPage() {
                                           : "Passport No."
                                 }
                             />
+                            {needsPhoto && (
+                                <div data-testid="id-photo-block">
+                                    <label className="block text-xs text-white/50 font-body mb-1.5">
+                                        Photo of your ID (required for this booking)
+                                    </label>
+                                    <input
+                                        type="file"
+                                        accept="image/jpeg,image/png,image/webp"
+                                        data-testid="id-photo"
+                                        onChange={(e) => onPhoto(e.target.files?.[0])}
+                                        className="w-full text-sm font-body text-white/70 file:mr-3 file:rounded-full file:border-0 file:bg-white/10 file:px-4 file:py-2 file:text-white"
+                                    />
+                                    {photoErr && <p className="text-xs text-red-400 font-body mt-2">{photoErr}</p>}
+                                    <p className="text-[11px] text-white/40 font-body mt-2">
+                                        The club deletes this photo as soon as it approves or rejects your booking.
+                                    </p>
+                                </div>
+                            )}
                         </motion.div>
                     )}
 

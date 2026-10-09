@@ -4,6 +4,7 @@
 import { neon } from "@neondatabase/serverless";
 import crypto from "crypto";
 import { promisify } from "util";
+import { seedClubs } from "@/data/seedClubs";
 
 const scrypt = promisify(crypto.scrypt);
 
@@ -37,7 +38,14 @@ const STATEMENTS = [
         password_hash text NOT NULL,
         created_at    timestamptz NOT NULL DEFAULT now()
     )`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS role text NOT NULL DEFAULT 'user'`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS club_id text`,
     `CREATE TABLE IF NOT EXISTS events (
+        id         text PRIMARY KEY,
+        data       jsonb NOT NULL,
+        created_at timestamptz NOT NULL DEFAULT now()
+    )`,
+    `CREATE TABLE IF NOT EXISTS clubs (
         id         text PRIMARY KEY,
         data       jsonb NOT NULL,
         created_at timestamptz NOT NULL DEFAULT now()
@@ -67,17 +75,99 @@ const STATEMENTS = [
         created_at     timestamptz NOT NULL DEFAULT now()
     )`,
     `CREATE INDEX IF NOT EXISTS bookings_user_idx ON bookings (user_id, created_at DESC)`,
+    `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS club_id text`,
+    `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS booking_type text NOT NULL DEFAULT 'non_exclusive'`,
+    `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_gateway text`,
+    `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS review_reason text`,
+    `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS reviewed_at timestamptz`,
+    `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS reviewed_by text`,
+    `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS transferred_from text`,
+    `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS used_at timestamptz`,
+    `CREATE INDEX IF NOT EXISTS bookings_club_idx ON bookings (club_id, created_at DESC)`,
+    // Flyers and other public images (served by /api/assets/[id])
+    `CREATE TABLE IF NOT EXISTS assets (
+        id         text PRIMARY KEY,
+        mime       text NOT NULL,
+        data       text NOT NULL,
+        created_at timestamptz NOT NULL DEFAULT now()
+    )`,
+    // Guest ID photos. Never served to users; club staff only. Blanked + deleted_at set on decision.
+    `CREATE TABLE IF NOT EXISTS id_photos (
+        booking_id text PRIMARY KEY REFERENCES bookings(id) ON DELETE CASCADE,
+        data       text NOT NULL,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        deleted_at timestamptz
+    )`,
+    `CREATE TABLE IF NOT EXISTS scan_logs (
+        id           text PRIMARY KEY,
+        booking_id   text,
+        ticket_code  text,
+        event_id     text,
+        club_id      text,
+        gate_user_id text,
+        gate_name    text,
+        result       text NOT NULL,
+        reason       text,
+        scanned_at   timestamptz NOT NULL DEFAULT now()
+    )`,
+    `CREATE INDEX IF NOT EXISTS scan_logs_club_idx ON scan_logs (club_id, scanned_at DESC)`,
+    `CREATE TABLE IF NOT EXISTS email_logs (
+        id         text PRIMARY KEY,
+        booking_id text,
+        to_email   text,
+        subject    text,
+        status     text NOT NULL,
+        error      text,
+        created_at timestamptz NOT NULL DEFAULT now()
+    )`,
+    `CREATE TABLE IF NOT EXISTS payment_gateways (
+        id         text PRIMARY KEY,
+        name       text NOT NULL,
+        enabled    boolean NOT NULL DEFAULT false,
+        mode       text NOT NULL DEFAULT 'test',
+        key_id     text,
+        updated_at timestamptz NOT NULL DEFAULT now()
+    )`,
     `CREATE TABLE IF NOT EXISTS login_attempts (
         email      text NOT NULL,
         created_at timestamptz NOT NULL DEFAULT now()
     )`,
     `CREATE INDEX IF NOT EXISTS login_attempts_idx ON login_attempts (email, created_at)`,
+    `CREATE TABLE IF NOT EXISTS schema_migrations (
+        name       text PRIMARY KEY,
+        applied_at timestamptz NOT NULL DEFAULT now()
+    )`,
 ];
+
+const GATEWAY_SEEDS = [
+    ["razorpay", "Razorpay", true],
+    ["stripe", "Stripe", false],
+    ["payu", "PayU", false],
+    ["cashfree", "Cashfree", false],
+];
+
+// Demo accounts, one per role. Disable all of them with DEMO_USER=off.
+const demoAccounts = () => {
+    const puneClub = seedClubs.find((c) => c.city_slug === "pune")?.id ?? null;
+    return [
+        { name: "Test User", email: "test@bash.in", password: "test1234", role: "user", club_id: null },
+        { name: "Ballrs Club Admin", email: "club@bash.in", password: "club1234", role: "club_admin", club_id: puneClub },
+        { name: "Ballrs Gate", email: "gate@bash.in", password: "gate1234", role: "gate", club_id: puneClub },
+        { name: "Bash Developer", email: "dev@bash.in", password: "dev12345", role: "developer", club_id: null },
+    ];
+};
+
+async function migrateOnce(q, name, fn) {
+    const done = await q`SELECT 1 FROM schema_migrations WHERE name = ${name}`;
+    if (done.length) return;
+    await fn();
+    await q`INSERT INTO schema_migrations (name) VALUES (${name}) ON CONFLICT DO NOTHING`;
+}
 
 let ready = null;
 
 /**
- * Creates tables on first use (once per server instance) and seeds the demo user.
+ * Creates tables on first use (once per server instance) and seeds demo data.
  * Every store function awaits this, so no manual migration step is required.
  */
 export function ensureReady() {
@@ -92,13 +182,27 @@ export function ensureReady() {
                     await run(q, stmt);
                 }
             }
+
+            // One-time rename of the old booking statuses: confirmed -> approved, pending -> awaiting_payment.
+            await migrateOnce(q, "booking-status-v2", async () => {
+                await q`UPDATE bookings SET status = 'approved' WHERE status = 'confirmed'`;
+                await q`UPDATE bookings SET status = 'awaiting_payment' WHERE status = 'pending'`;
+            });
+
+            for (const [id, name, enabled] of GATEWAY_SEEDS) {
+                await q`INSERT INTO payment_gateways (id, name, enabled, mode)
+                        VALUES (${id}, ${name}, ${enabled}, 'test') ON CONFLICT (id) DO NOTHING`;
+            }
+
             if (process.env.DEMO_USER !== "off") {
-                const existing = await q`SELECT 1 FROM users WHERE email = 'test@bash.in'`;
-                if (existing.length === 0) {
+                for (const acc of demoAccounts()) {
+                    const existing = await q`SELECT 1 FROM users WHERE email = ${acc.email}`;
+                    if (existing.length) continue;
                     const salt = crypto.randomBytes(16).toString("hex");
-                    const hash = (await scrypt("test1234", salt, 64)).toString("hex");
-                    await q`INSERT INTO users (id, name, email, password_hash)
-                            VALUES (${crypto.randomBytes(12).toString("hex")}, 'Test User', 'test@bash.in', ${salt + ":" + hash})
+                    const hash = (await scrypt(acc.password, salt, 64)).toString("hex");
+                    await q`INSERT INTO users (id, name, email, password_hash, role, club_id)
+                            VALUES (${crypto.randomBytes(12).toString("hex")}, ${acc.name}, ${acc.email},
+                                    ${salt + ":" + hash}, ${acc.role}, ${acc.club_id})
                             ON CONFLICT (email) DO NOTHING`;
                 }
             }

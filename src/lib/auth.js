@@ -57,7 +57,13 @@ async function verifyToken(token) {
 }
 
 /* ---------- users ---------- */
-export const publicUser = (u) => ({ id: u.id, name: u.name, email: u.email });
+export const publicUser = (u) => ({
+    id: u.id,
+    name: u.name,
+    email: u.email,
+    role: u.role || "user",
+    club_id: u.club_id || null,
+});
 
 export async function findUserByEmail(email) {
     await ensureReady();
@@ -65,12 +71,13 @@ export async function findUserByEmail(email) {
     return rows[0] || null;
 }
 
-export async function createUser({ name, email, password }) {
+export async function createUser({ name, email, password, role = "user", club_id = null }) {
     await ensureReady();
     const clean = String(email).trim().toLowerCase();
     const rows = await sql`
-        INSERT INTO users (id, name, email, password_hash)
-        VALUES (${crypto.randomBytes(12).toString("hex")}, ${String(name).trim()}, ${clean}, ${await hashPassword(password)})
+        INSERT INTO users (id, name, email, password_hash, role, club_id)
+        VALUES (${crypto.randomBytes(12).toString("hex")}, ${String(name).trim()}, ${clean},
+                ${await hashPassword(password)}, ${role}, ${club_id})
         ON CONFLICT (email) DO NOTHING
         RETURNING *`;
     return rows[0] || null; // null = already registered

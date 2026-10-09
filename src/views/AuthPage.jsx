@@ -7,6 +7,7 @@ import { useNav } from "@/lib/useNav";
 import { motion } from "framer-motion";
 import { useAuth } from "@/context/AuthContext";
 import { formatErr } from "@/lib/api";
+import { homeFor } from "@/lib/roleHome";
 
 export default function AuthPage({ mode = "login" }) {
     const { login, register } = useAuth();
@@ -29,9 +30,12 @@ export default function AuthPage({ mode = "login" }) {
         setErr("");
         setLoading(true);
         try {
-            if (mode === "login") await login(email, password);
-            else await register(name, email, password);
-            nav(next);
+            const u =
+                mode === "login"
+                    ? await login(email, password)
+                    : await register(name, email, password);
+            // a ?next= from a protected page wins; otherwise go to the role's own panel
+            nav(sp.get("next") ? next : homeFor(u?.role));
         } catch (e) {
             setErr(formatErr(e.response?.data?.detail) || e.message);
         } finally {
