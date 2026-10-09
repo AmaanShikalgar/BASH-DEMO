@@ -53,3 +53,33 @@ export async function sendTicketEmail(booking) {
                       ${subject}, ${status}, ${error})`;
     return { status, error };
 }
+
+/**
+ * Tells the Bash team a club asked to join. Set LEADS_NOTIFY_EMAIL (comma separated) to turn it on.
+ * Never throws: the club's request is already saved, the email is only a nudge.
+ */
+export async function notifyNewLead(lead) {
+    const to = String(process.env.LEADS_NOTIFY_EMAIL || "").split(",").map((x) => x.trim()).filter(Boolean);
+    const key = process.env.RESEND_API_KEY;
+    if (!to.length || !key) return;
+    try {
+        await fetch("https://api.resend.com/emails", {
+            method: "POST",
+            headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+            body: JSON.stringify({
+                from: process.env.EMAIL_FROM || "Bash Tickets <onboarding@resend.dev>",
+                to,
+                subject: `New club lead: ${lead.club_name} (${lead.city_name})`,
+                html: `<div style="font-family:Arial,sans-serif">
+                  <p><strong>${esc(lead.club_name)}</strong>, ${esc(lead.city_name)}</p>
+                  <p>${esc(lead.contact_name)} · ${esc(lead.phone)} · ${esc(lead.email)}</p>
+                  <p>Prefers: ${esc(lead.contact_pref)}</p>
+                  ${lead.message ? `<p>${esc(lead.message)}</p>` : ""}
+                  <p>Open the Developer panel, Leads tab, to follow up.</p></div>`,
+            }),
+            cache: "no-store",
+        });
+    } catch (e) {
+        console.error("notifyNewLead failed:", e.message);
+    }
+}

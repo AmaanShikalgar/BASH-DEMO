@@ -131,3 +131,25 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
         name       text PRIMARY KEY,
         applied_at timestamptz NOT NULL DEFAULT now()
     );
+
+CREATE TABLE IF NOT EXISTS business_leads (
+        id           text PRIMARY KEY,
+        club_name    text NOT NULL,
+        city_slug    text NOT NULL,
+        contact_name text NOT NULL,
+        phone        text NOT NULL,
+        email        text NOT NULL,
+        instagram    text,
+        website      text,
+        contact_pref text NOT NULL DEFAULT 'call',
+        message      text,
+        status       text NOT NULL DEFAULT 'new',
+        dev_notes    text,
+        club_id      text,
+        created_at   timestamptz NOT NULL DEFAULT now(),
+        updated_at   timestamptz NOT NULL DEFAULT now()
+    );
+
+CREATE INDEX IF NOT EXISTS business_leads_status_idx ON business_leads (status, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS business_leads_email_idx ON business_leads (email, created_at);

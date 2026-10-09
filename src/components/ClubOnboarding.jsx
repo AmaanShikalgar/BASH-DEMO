@@ -24,7 +24,7 @@ function openDataUrl(dataUrl) {
     window.open(url, "_blank", "noopener");
 }
 
-function Drawer({ title, onClose, children }) {
+export function Drawer({ title, onClose, children }) {
     return (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex justify-end" onClick={onClose}>
             <div
@@ -219,7 +219,7 @@ function ApplicationForm({ clubId, initial, onSaved }) {
     );
 }
 
-function ReviewDrawer({ clubId, onClose, onChanged }) {
+export function ReviewDrawer({ clubId, onClose, onChanged }) {
     const [d, setD] = useState(null);
     const [editing, setEditing] = useState(false);
     const [reason, setReason] = useState("");

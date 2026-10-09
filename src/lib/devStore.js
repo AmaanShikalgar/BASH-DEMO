@@ -13,7 +13,8 @@ export async function devOverview() {
         SELECT status, COUNT(*)::int AS n, COALESCE(SUM(amount), 0)::int AS amount
           FROM bookings GROUP BY status`;
     const scans = await sql`SELECT result, COUNT(*)::int AS n FROM scan_logs GROUP BY result`;
-    return { roles, bookings, scans };
+    const leads = await sql`SELECT COUNT(*)::int AS n FROM business_leads WHERE status = 'new'`;
+    return { roles, bookings, scans, new_leads: leads[0].n };
 }
 
 /** Every club with its events, quota allocation, booking counts and staff. */

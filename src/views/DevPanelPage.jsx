@@ -10,9 +10,11 @@ import { api, formatErr, inr } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { CITIES } from "@/lib/geo";
 import ClubOnboarding from "@/components/ClubOnboarding";
+import LeadsInbox from "@/components/LeadsInbox";
 
 const TABS = [
     { id: "overview", label: "Overview" },
+    { id: "leads", label: "Club leads" },
     { id: "clubs", label: "Clubs" },
     { id: "users", label: "Users & roles" },
     { id: "bookings", label: "All bookings" },
@@ -65,6 +67,7 @@ export default function DevPanelPage() {
                 </div>
                 <div className="mt-6">
                     {tab === "overview" && <Overview />}
+                    {tab === "leads" && <LeadsInbox />}
                     {tab === "clubs" && <ClubsTab />}
                     {tab === "users" && <UsersTab />}
                     {tab === "bookings" && <BookingsTab />}
@@ -100,7 +103,8 @@ function Overview() {
                     <RefreshCw className="w-4 h-4" /> Refresh
                 </Btn>
             </div>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                <Stat label="New club leads" value={data.new_leads || 0} />
                 <Stat label="Approved revenue" value={inr(revenue)} />
                 <Stat label="Bookings" value={total} />
                 <Stat label="Pending review" value={bookingMap.pending?.n || 0} />

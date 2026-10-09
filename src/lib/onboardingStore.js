@@ -56,6 +56,40 @@ export async function createApplication(raw) {
     return club;
 }
 
+/**
+ * Starts an application from a public lead. Unlike createApplication this does not require the
+ * full form: only what the club already told us is filled in. The rest shows up as blockers in the
+ * review drawer, and the developer completes it while talking to the club.
+ */
+export async function createApplicationFromLead(lead) {
+    await ensureReady();
+    const city = cityOf(lead.city_slug);
+    if (!city) throw new BookingError("Lead has an unknown city", 422);
+
+    const application = {
+        trade_name: lead.club_name,
+        city_slug: lead.city_slug,
+        admin_name: lead.contact_name,
+        admin_mobile: lead.phone,
+        admin_email: lead.email,
+        instagram: lead.instagram || "",
+        website: lead.website || "",
+    };
+    const club = await createClub({
+        name: lead.club_name,
+        city: city.name,
+        city_slug: city.slug,
+        address: "",
+        capacity: 0, // set from the Fire NOC capacity when the club is approved
+        is_active: false,
+        verification_status: "pending_documents",
+        lead_id: lead.id,
+    });
+    await sql`INSERT INTO club_applications (club_id, data, status)
+              VALUES (${club.id}, ${JSON.stringify(application)}::jsonb, 'pending_documents')`;
+    return club;
+}
+
 export async function updateApplication(clubId, raw) {
     await ensureReady();
     const app = await loadApp(clubId);
@@ -186,6 +220,7 @@ export async function decideApplication(clubId, action, reason) {
         });
         await sql`UPDATE club_applications SET status = 'approved', reviewer_note = NULL,
                          decided_at = now(), updated_at = now() WHERE club_id = ${clubId}`;
+        await sql`UPDATE business_leads SET status = 'converted', updated_at = now() WHERE club_id = ${clubId}`;
     } else if (action === "reject") {
         const why = String(reason ?? "").trim();
         if (why.length < 3) throw new BookingError("Write the reason for rejecting", 422);
