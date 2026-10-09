@@ -7,7 +7,7 @@ import { useNav } from "@/lib/useNav";
 import { motion } from "framer-motion";
 import { ArrowLeft, CalendarPlus, Share2, ChevronRight } from "lucide-react";
 import AppShell from "@/components/AppShell";
-import TicketCard from "@/components/TicketCard";
+import TicketPass from "@/components/TicketPass";
 import { api, inr } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 
@@ -143,7 +143,7 @@ function TicketStub({ ticket, index, highlighted, onShare, onCal }) {
             data-testid={`ticket-${ticket.id}`}
             className="mx-auto w-full max-w-md"
         >
-            <TicketCard ticket={ticket} highlighted={highlighted} />
+            <TicketPass ticket={ticket} highlighted={highlighted} />
 
             <div className="mt-4 grid grid-cols-2 gap-3">
                 <button

@@ -6,7 +6,7 @@ import { motion } from "framer-motion";
 import { Clock, Lock, QrCode, X, Maximize2, CheckCircle2 } from "lucide-react";
 import QRCode from "@/components/QRCode";
 
-const STATUS_STYLE = {
+export const STATUS_STYLE = {
     approved: "bg-emerald-500/25 text-emerald-100 border-emerald-300/40",
     pending: "bg-amber-500/25 text-amber-100 border-amber-300/40",
     awaiting_payment: "bg-white/15 text-white border-white/30",
@@ -14,7 +14,7 @@ const STATUS_STYLE = {
     cancelled: "bg-red-500/25 text-red-100 border-red-300/40",
 };
 
-const STATUS_LABEL = {
+export const STATUS_LABEL = {
     approved: "Confirmed",
     pending: "Awaiting club approval",
     awaiting_payment: "Payment pending",
@@ -23,12 +23,67 @@ const STATUS_LABEL = {
 };
 
 // What to show in the QR slot when there is no usable QR.
-const LOCKED_TEXT = {
+export const LOCKED_TEXT = {
     awaiting_payment: "Complete payment to get your QR",
     pending: "Your QR unlocks once the club approves",
     rejected: "This ticket was rejected",
     cancelled: "This ticket was cancelled",
 };
+
+/**
+ * The QR itself, or a locked / admitted state. Shared by both ticket designs.
+ * `sizeClass` sets the box size (e.g. "h-44 w-44"); `compact` shrinks the text for small boxes.
+ */
+export function QRSlot({ ticket, sizeClass, compact = false, onOpen }) {
+    const used = Boolean(ticket.used_at);
+    const hasQR = ticket.ticket_code && ticket.status === "approved";
+
+    if (!hasQR) {
+        return (
+            <div
+                data-testid="qr-locked"
+                className={`${sizeClass} flex flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 px-2 text-center text-slate-400`}
+            >
+                <div className="relative">
+                    <QrCode className={compact ? "h-9 w-9 opacity-30" : "h-16 w-16 opacity-30"} />
+                    <Lock
+                        className={`absolute -bottom-1 -right-1 rounded-full bg-slate-100 p-1 text-slate-500 ${compact ? "h-4 w-4" : "h-6 w-6"}`}
+                    />
+                </div>
+                <p className={`font-body leading-snug ${compact ? "mt-1.5 text-[9px]" : "mt-3 text-xs"}`}>
+                    {LOCKED_TEXT[ticket.status] || "QR not available"}
+                </p>
+            </div>
+        );
+    }
+
+    return (
+        <button
+            type="button"
+            onClick={onOpen}
+            data-testid={`qr-open-${ticket.id}`}
+            aria-label="Enlarge QR code"
+            className="group relative rounded-2xl border border-slate-200 bg-white p-1.5 shadow-sm"
+        >
+            <QRCode value={ticket.ticket_code} className={`${sizeClass} ${used ? "opacity-20" : ""}`} />
+            {used ? (
+                <div className="absolute inset-0 flex flex-col items-center justify-center text-emerald-600">
+                    <CheckCircle2 className={compact ? "h-6 w-6" : "h-9 w-9"} />
+                    <span className={`mt-0.5 font-display font-bold tracking-wide ${compact ? "text-xs" : "text-lg"}`}>
+                        ADMITTED
+                    </span>
+                    <span className="text-[10px] font-body text-slate-500">
+                        {new Date(ticket.used_at).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit" })}
+                    </span>
+                </div>
+            ) : (
+                <span className="absolute bottom-2 right-2 rounded-full bg-slate-900/80 p-1 text-white opacity-90">
+                    <Maximize2 className={compact ? "w-2.5 h-2.5" : "w-3.5 h-3.5"} />
+                </span>
+            )}
+        </button>
+    );
+}
 
 const Field = ({ label, value, className = "" }) => (
     <div className={className}>
@@ -40,13 +95,12 @@ const Field = ({ label, value, className = "" }) => (
 );
 
 /**
- * The ticket: event image + details on top, a perforation, and the QR stub underneath.
- * The QR encodes the ticket code (BASH-XXXXXXXX), the same code gate staff can type.
+ * Purchase-style ticket (blue/purple reference): event image + details on top,
+ * perforation, QR stub underneath. Used on the booking confirmation screen.
  */
 export default function TicketCard({ ticket, highlighted = false }) {
     const [zoom, setZoom] = useState(false);
-    const used = Boolean(ticket.used_at);
-    const live = ticket.status === "approved" && Boolean(ticket.ticket_code) && !used;
+    const live = ticket.status === "approved" && Boolean(ticket.ticket_code) && !ticket.used_at;
 
     return (
         <>
@@ -55,15 +109,10 @@ export default function TicketCard({ ticket, highlighted = false }) {
                 className="relative"
                 style={highlighted ? { filter: "drop-shadow(0 0 14px rgba(168,85,247,0.65))" } : undefined}
             >
-                {/* ---------- top: image + details ---------- */}
                 <div className="ticket-top overflow-hidden rounded-t-[28px] bg-white">
                     <div className="relative h-52 md:h-60">
                         {ticket.event_image ? (
-                            <img
-                                src={ticket.event_image}
-                                alt={ticket.event_title}
-                                className="h-full w-full object-cover"
-                            />
+                            <img src={ticket.event_image} alt={ticket.event_title} className="h-full w-full object-cover" />
                         ) : (
                             <div className="h-full w-full bg-gradient-to-br from-blue-500 to-purple-600" />
                         )}
@@ -101,61 +150,21 @@ export default function TicketCard({ ticket, highlighted = false }) {
                     </div>
                 </div>
 
-                {/* ---------- bottom: QR stub ---------- */}
                 <div className="ticket-bottom relative rounded-b-[28px] bg-white px-6 pb-6 pt-7">
                     <div className="absolute left-7 right-7 top-0 border-t-2 border-dashed border-slate-300" />
-
                     <div className="flex flex-col items-center">
-                        {ticket.ticket_code && ticket.status === "approved" ? (
-                            <button
-                                type="button"
-                                onClick={() => setZoom(true)}
-                                data-testid={`qr-open-${ticket.id}`}
-                                aria-label="Enlarge QR code"
-                                className="group relative rounded-2xl border border-slate-200 bg-white p-2 shadow-sm"
-                            >
-                                <QRCode
-                                    value={ticket.ticket_code}
-                                    className={`h-44 w-44 md:h-48 md:w-48 ${used ? "opacity-20" : ""}`}
-                                />
-                                {used ? (
-                                    <div className="absolute inset-0 flex flex-col items-center justify-center text-emerald-600">
-                                        <CheckCircle2 className="w-9 h-9" />
-                                        <span className="mt-1 font-display text-lg font-bold tracking-wide">ADMITTED</span>
-                                        <span className="text-[11px] font-body text-slate-500">
-                                            {new Date(ticket.used_at).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit" })}
-                                        </span>
-                                    </div>
-                                ) : (
-                                    <span className="absolute bottom-3 right-3 rounded-full bg-slate-900/80 p-1.5 text-white opacity-90">
-                                        <Maximize2 className="w-3.5 h-3.5" />
-                                    </span>
-                                )}
-                            </button>
-                        ) : (
-                            <div
-                                data-testid="qr-locked"
-                                className="flex h-48 w-48 flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 px-4 text-center text-slate-400"
-                            >
-                                <div className="relative">
-                                    <QrCode className="h-16 w-16 opacity-30" />
-                                    <Lock className="absolute -bottom-1 -right-1 h-6 w-6 rounded-full bg-slate-100 p-1 text-slate-500" />
-                                </div>
-                                <p className="mt-3 text-xs font-body leading-snug">
-                                    {LOCKED_TEXT[ticket.status] || "QR not available"}
-                                </p>
-                            </div>
-                        )}
-
+                        <QRSlot
+                            ticket={ticket}
+                            sizeClass="h-44 w-44 md:h-48 md:w-48"
+                            onOpen={() => setZoom(true)}
+                        />
                         <div className="mt-4 text-[10px] uppercase tracking-[0.2em] text-slate-400 font-body">
                             Ticket code
                         </div>
                         <div className="mt-1 font-mono text-lg font-bold tracking-[0.18em] text-slate-900">
                             {ticket.ticket_code || "— — — —"}
                         </div>
-                        {live && (
-                            <p className="mt-2 text-xs text-slate-500 font-body">Show this QR at the gate</p>
-                        )}
+                        {live && <p className="mt-2 text-xs text-slate-500 font-body">Show this QR at the gate</p>}
                     </div>
                 </div>
             </div>
@@ -166,7 +175,7 @@ export default function TicketCard({ ticket, highlighted = false }) {
 }
 
 // Full-screen QR for scanning. Rendered in a portal so the card's animation can't affect it.
-function QRModal({ ticket, onClose }) {
+export function QRModal({ ticket, onClose }) {
     useEffect(() => {
         const onKey = (e) => e.key === "Escape" && onClose();
         window.addEventListener("keydown", onKey);
@@ -202,9 +211,7 @@ function QRModal({ ticket, onClose }) {
                 >
                     <X className="h-4 w-4" />
                 </button>
-                <div className="font-display text-xl font-bold text-slate-900 pr-8 text-left">
-                    {ticket.event_title}
-                </div>
+                <div className="font-display text-xl font-bold text-slate-900 pr-8 text-left">{ticket.event_title}</div>
                 <div className="text-left text-xs text-slate-500 font-body mt-0.5">
                     {ticket.attendee_name} · {ticket.tier} × {ticket.quantity}
                 </div>

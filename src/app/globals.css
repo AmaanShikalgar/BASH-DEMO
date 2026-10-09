@@ -198,3 +198,15 @@ html {
     -webkit-mask-repeat: no-repeat;
     mask-repeat: no-repeat;
 }
+
+/* Booking summary ticket: notches where the dashed stub begins (stub is 7rem wide) */
+.mini-ticket {
+    -webkit-mask-image:
+        radial-gradient(circle 9px at calc(100% - 7rem) 0, transparent 97%, #000 100%),
+        radial-gradient(circle 9px at calc(100% - 7rem) 100%, transparent 97%, #000 100%);
+    mask-image:
+        radial-gradient(circle 9px at calc(100% - 7rem) 0, transparent 97%, #000 100%),
+        radial-gradient(circle 9px at calc(100% - 7rem) 100%, transparent 97%, #000 100%);
+    -webkit-mask-composite: source-in;
+    mask-composite: intersect;
+}
