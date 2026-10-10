@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useNav } from "@/lib/useNav";
 import { toast } from "sonner";
 import {
-    Camera, Copy, Instagram, Loader2, Check, Ticket, CalendarCheck, QrCode as QrIcon, RotateCw,
+    Camera, Copy, Instagram, Loader2, Check, Ticket, CalendarCheck, QrCode as QrIcon, RotateCw, Smartphone,
     LogOut, KeyRound, Bell, Shield, UserRound, ChevronRight, Eye, EyeOff,
 } from "lucide-react";
 import AppShell from "@/components/AppShell";
@@ -140,29 +140,68 @@ function MemberCard({ profile, busy, onPhoto, copyId }) {
     const tiltRef = useRef(null);
     const tier = tierFor(profile.stats.tickets);
 
-    const onMove = (e) => {
+    const [motion, setMotion] = useState("idle"); // idle | needs-permission | on | denied
+    const stopMotion = useRef(null);
+
+    // x, y in 0..1 (0.5 = level). Drives the 3D tilt and the foil shimmer.
+    const applyTilt = useCallback((x, y) => {
         const el = tiltRef.current;
         if (!el) return;
-        const r = el.getBoundingClientRect();
-        const x = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
-        const y = Math.min(1, Math.max(0, (e.clientY - r.top) / r.height));
         el.style.setProperty("--rx", `${((0.5 - y) * 14).toFixed(2)}deg`);
         el.style.setProperty("--ry", `${((x - 0.5) * 16).toFixed(2)}deg`);
         el.style.setProperty("--mx", `${(x * 100).toFixed(1)}%`);
         el.style.setProperty("--my", `${(y * 100).toFixed(1)}%`);
+    }, []);
+
+    // Mouse only. On phones the card follows the device's tilt instead of touch.
+    const onMove = (e) => {
+        if (e.pointerType !== "mouse" && e.pointerType !== "pen") return;
+        const r = tiltRef.current.getBoundingClientRect();
+        applyTilt(
+            Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)),
+            Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)),
+        );
     };
-    const onLeave = () => {
-        const el = tiltRef.current;
-        if (!el) return;
-        ["--rx", "--ry"].forEach((k) => el.style.setProperty(k, "0deg"));
-        el.style.setProperty("--mx", "50%");
-        el.style.setProperty("--my", "50%");
+    const onLeave = () => applyTilt(0.5, 0.5);
+
+    const startMotion = useCallback(() => {
+        const clamp = (n) => Math.min(1, Math.max(0, n));
+        const h = (e) => {
+            if (e.beta == null || e.gamma == null) return;
+            // gamma: tilt left/right. beta: tilt toward/away (about 45deg is a normal phone hold).
+            applyTilt(clamp(0.5 + e.gamma / 50), clamp(0.5 + (e.beta - 45) / 50));
+        };
+        window.addEventListener("deviceorientation", h);
+        stopMotion.current = () => window.removeEventListener("deviceorientation", h);
+        setMotion("on");
+    }, [applyTilt]);
+
+    useEffect(() => {
+        if (typeof window === "undefined") return;
+        if (!window.matchMedia("(pointer: coarse)").matches || !("DeviceOrientationEvent" in window)) return;
+        if (typeof window.DeviceOrientationEvent.requestPermission === "function") {
+            setMotion("needs-permission"); // iOS asks for permission, and only from a tap
+        } else {
+            startMotion();
+        }
+        return () => stopMotion.current?.();
+    }, [startMotion]);
+
+    const enableMotion = async () => {
+        try {
+            const r = await window.DeviceOrientationEvent.requestPermission();
+            if (r === "granted") return startMotion();
+        } catch {}
+        setMotion("denied");
+        toast.error("Motion access is blocked. Allow it in Safari settings to tilt the card.");
     };
     const stop = (e) => e.stopPropagation();
 
     return (
         <div className="mx-auto w-full max-w-[340px]" data-testid="member-card">
-            <div style={{ perspective: "1200px" }}>
+            <div className="lanyard-swing">
+            <Lanyard />
+            <div className="relative z-10" style={{ perspective: "1200px" }}>
                 <div
                     ref={tiltRef}
                     onPointerMove={onMove}
@@ -193,8 +232,9 @@ function MemberCard({ profile, busy, onPhoto, copyId }) {
                                 )}
                                 <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/25 to-black/30" />
                                 <div className="holo-foil absolute inset-0 pointer-events-none" />
+                                <Slot />
 
-                                <div className="absolute top-4 left-4 right-4 flex items-center justify-between">
+                                <div className="absolute top-9 left-4 right-4 flex items-center justify-between">
                                     <div className="flex items-center gap-2">
                                         <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center font-display font-bold text-sm">B</div>
                                         <span className="font-display text-lg tracking-tight">Bash</span>
@@ -253,6 +293,7 @@ function MemberCard({ profile, busy, onPhoto, copyId }) {
                         >
                             <div className="relative h-full w-full rounded-[26px] overflow-hidden bg-gradient-to-b from-[#1a1038] via-[#0f1226] to-[#0b0f19] flex flex-col">
                                 <div className="holo-foil absolute inset-0 pointer-events-none opacity-60" />
+                                <Slot />
 
                                 <div className="relative h-[24%] shrink-0">
                                     {profile.photo_side ? (
@@ -263,7 +304,7 @@ function MemberCard({ profile, busy, onPhoto, copyId }) {
                                         </div>
                                     )}
                                     <div className="absolute inset-0 bg-gradient-to-t from-[#0f1226] to-transparent" />
-                                    <div className="absolute top-3 right-3" onClick={stop}>
+                                    <div className="absolute top-9 right-3" onClick={stop}>
                                         <PhotoButton busy={busy === "side"} onFile={(f) => onPhoto("side", f)} label="Change second photo" testid="photo-side" />
                                     </div>
                                 </div>
@@ -314,12 +355,72 @@ function MemberCard({ profile, busy, onPhoto, copyId }) {
                 </div>
             </div>
 
-            <div className="mt-4 flex items-center justify-center">
+            </div>
+
+            <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
                 <Btn onClick={() => setFlipped((f) => !f)} data-testid="flip-card">
                     <RotateCw className="w-4 h-4" /> {flipped ? "Show front" : "Flip for QR & details"}
                 </Btn>
+                {motion === "needs-permission" && (
+                    <Btn onClick={enableMotion} data-testid="enable-tilt">
+                        <Smartphone className="w-4 h-4" /> Enable tilt
+                    </Btn>
+                )}
             </div>
         </div>
+    );
+}
+
+/* The punched slot the lanyard clip goes through */
+function Slot() {
+    return (
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 w-16 h-4 rounded-full bg-[#05030b]/85 border border-white/25 shadow-[inset_0_2px_4px_rgba(0,0,0,0.8)]" />
+    );
+}
+
+/* Strap in a V that ends in a metal clip, so the card looks like it hangs from a lanyard */
+function Lanyard() {
+    return (
+        <svg
+            viewBox="0 0 340 130"
+            className="relative z-20 block w-full h-auto -mb-7 pointer-events-none lanyard-fade"
+            aria-hidden="true"
+        >
+            <defs>
+                <linearGradient id="strapG" x1="0" y1="0" x2="1" y2="1">
+                    <stop offset="0" stopColor="#4f8bff" />
+                    <stop offset="0.55" stopColor="#a855f7" />
+                    <stop offset="1" stopColor="#ff4fd8" />
+                </linearGradient>
+                <linearGradient id="metalG" x1="0" y1="0" x2="1" y2="1">
+                    <stop offset="0" stopColor="#f3f4f6" />
+                    <stop offset="0.5" stopColor="#9ca3af" />
+                    <stop offset="1" stopColor="#e5e7eb" />
+                </linearGradient>
+                <path id="strapL" d="M62 -6 L166 92" />
+                <path id="strapR" d="M278 -6 L174 92" />
+            </defs>
+
+            {/* the two strap bands */}
+            {["strapL", "strapR"].map((id) => (
+                <g key={id}>
+                    <use href={`#${id}`} stroke="url(#strapG)" strokeWidth="26" fill="none" />
+                    <use href={`#${id}`} stroke="rgba(255,255,255,0.35)" strokeWidth="26" strokeDasharray="4 5" fill="none" opacity="0.0" />
+                    <text fontFamily="Clash Display, sans-serif" fontSize="11" fontWeight="700" letterSpacing="3" fill="rgba(255,255,255,0.85)" dy="4">
+                        <textPath href={`#${id}`} startOffset="6">BASH · BASH · BASH · BASH</textPath>
+                    </text>
+                </g>
+            ))}
+
+            {/* strap sewn together above the clip */}
+            <path d="M154 80 L186 80 L184 100 L156 100 Z" fill="#7c3aed" />
+            <path d="M156 86 H184 M156 93 H184" stroke="rgba(255,255,255,0.45)" strokeWidth="1" strokeDasharray="3 3" />
+
+            {/* swivel clip */}
+            <rect x="160" y="98" width="20" height="14" rx="4" fill="url(#metalG)" stroke="#6b7280" strokeWidth="1" />
+            <rect x="164" y="108" width="12" height="18" rx="6" fill="none" stroke="url(#metalG)" strokeWidth="4" />
+            <rect x="164" y="108" width="12" height="18" rx="6" fill="none" stroke="#6b7280" strokeWidth="0.8" />
+        </svg>
     );
 }
 
