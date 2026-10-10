@@ -237,23 +237,3 @@ html {
     background-size: 100% 100%, 250% 250%;
     background-position: 0 0, var(--mx, 50%) var(--my, 50%);
 }
-@media (prefers-reduced-motion: reduce) {
-    .holo-border, .holo-foil { transition: none; }
-}
-
-/* Lanyard: the card sways gently from its strap */
-.lanyard-swing {
-    transform-origin: 50% 0;
-    animation: lanyard-sway 7s ease-in-out infinite;
-}
-.lanyard-fade {
-    -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 40%);
-    mask-image: linear-gradient(to bottom, transparent 0%, #000 40%);
-}
-@keyframes lanyard-sway {
-    0%, 100% { transform: rotate(-1.4deg); }
-    50% { transform: rotate(1.4deg); }
-}
-@media (prefers-reduced-motion: reduce) {
-    .lanyard-swing { animation: none; }
-}
