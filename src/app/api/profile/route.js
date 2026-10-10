@@ -1,5 +1,5 @@
 import { getUserFromRequest } from "@/lib/auth";
-import { getProfile, updateInstagram } from "@/lib/profileStore";
+import { getProfile, updateDetails } from "@/lib/profileStore";
 import { fail, ok, route } from "@/lib/http";
 
 export const dynamic = "force-dynamic";
@@ -11,10 +11,10 @@ export const GET = route(async (req) => {
     return ok(await getProfile(user.id));
 });
 
-// Body: { instagram }
+// Body: any of { name, phone, city, instagram }
 export const PATCH = route(async (req) => {
     const user = await getUserFromRequest(req);
     if (!user) return fail("Sign in first", 401);
     const b = await req.json().catch(() => ({}));
-    return ok(await updateInstagram(user.id, b.instagram));
+    return ok(await updateDetails(user.id, b));
 });

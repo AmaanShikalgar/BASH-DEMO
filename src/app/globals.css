@@ -210,3 +210,33 @@ html {
     -webkit-mask-composite: source-in;
     mask-composite: intersect;
 }
+
+/* ---------- Profile: holographic member card ---------- */
+.holo-border {
+    --mx: 50%;
+    --my: 50%;
+    background:
+        conic-gradient(
+            from calc(var(--mx) * 3.6) at var(--mx) var(--my),
+            #4f8bff, #a855f7, #ff4fd8, #ffd36e, #5ef2c2, #4f8bff
+        );
+}
+.holo-foil {
+    mix-blend-mode: color-dodge;
+    opacity: 0.35;
+    background:
+        radial-gradient(circle at var(--mx, 50%) var(--my, 50%), rgba(255, 255, 255, 0.55), transparent 45%),
+        repeating-linear-gradient(
+            115deg,
+            rgba(79, 139, 255, 0.55) 0%,
+            rgba(168, 85, 247, 0.55) 12%,
+            rgba(255, 79, 216, 0.55) 24%,
+            rgba(94, 242, 194, 0.45) 36%,
+            rgba(79, 139, 255, 0.55) 48%
+        );
+    background-size: 100% 100%, 250% 250%;
+    background-position: 0 0, var(--mx, 50%) var(--my, 50%);
+}
+@media (prefers-reduced-motion: reduce) {
+    .holo-border, .holo-foil { transition: none; }
+}

@@ -4,6 +4,8 @@
 import crypto from "crypto";
 import { sql, ensureReady } from "@/lib/db";
 import { BookingError } from "@/lib/bookingStore";
+import { CITIES } from "@/lib/geo";
+import { hashPassword, verifyPassword } from "@/lib/auth";
 
 const IMAGE_RE = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/;
 const MAX_BYTES = 2 * 1024 * 1024;
@@ -30,7 +32,8 @@ export function normalizeInstagram(raw) {
 export async function getProfile(userId) {
     await ensureReady();
     const u = (
-        await sql`SELECT name, email, bash_id, instagram, photo_top, photo_side, created_at
+        await sql`SELECT name, email, bash_id, instagram, photo_top, photo_side, created_at,
+                         phone, city, dob, role
                     FROM users WHERE id = ${userId}`
     )[0];
     if (!u) return null;
@@ -38,9 +41,21 @@ export async function getProfile(userId) {
         await sql`SELECT id_type, id_last4 FROM bookings
                    WHERE user_id = ${userId} ORDER BY created_at DESC LIMIT 1`
     )[0];
+    const stats = (
+        await sql`SELECT
+                    count(*) FILTER (WHERE status IN ('approved','pending'))::int AS tickets,
+                    count(*) FILTER (WHERE used_at IS NOT NULL)::int AS attended,
+                    count(DISTINCT event_id) FILTER (WHERE status IN ('approved','pending'))::int AS events
+                  FROM bookings WHERE user_id = ${userId}`
+    )[0];
     return {
         name: u.name,
         email: u.email,
+        phone: u.phone || null,
+        city: u.city || null,
+        dob: u.dob ? new Date(u.dob).toISOString().slice(0, 10) : null,
+        role: u.role || "user",
+        stats: { tickets: stats?.tickets ?? 0, attended: stats?.attended ?? 0, events: stats?.events ?? 0 },
         bash_id: u.bash_id,
         instagram: u.instagram,
         photo_top: u.photo_top,
@@ -82,4 +97,41 @@ export async function setProfilePhoto(userId, slot, dataUrl) {
         await sql`DELETE FROM assets WHERE id = ${oldId}`;
     }
     return getProfile(userId);
+}
+
+/** Body: any of { name, phone, city, instagram }. Only the fields that are sent are changed. */
+export async function updateDetails(userId, b = {}) {
+    await ensureReady();
+    if (b.name !== undefined) {
+        const name = String(b.name).trim().slice(0, 80);
+        if (!name) throw new BookingError("Name can't be empty", 422);
+        await sql`UPDATE users SET name = ${name} WHERE id = ${userId}`;
+    }
+    if (b.phone !== undefined) {
+        const phone = String(b.phone).replace(/[\s-]/g, "").slice(0, 15);
+        if (!/^(\+91)?[6-9]\d{9}$/.test(phone)) throw new BookingError("Enter a valid 10-digit mobile number", 422);
+        await sql`UPDATE users SET phone = ${phone} WHERE id = ${userId}`;
+    }
+    if (b.city !== undefined) {
+        const city = String(b.city).trim();
+        if (!CITIES.some((c) => c.slug === city)) throw new BookingError("Choose a city from the list", 422);
+        await sql`UPDATE users SET city = ${city} WHERE id = ${userId}`;
+    }
+    if (b.instagram !== undefined) {
+        const handle = normalizeInstagram(b.instagram);
+        await sql`UPDATE users SET instagram = ${handle} WHERE id = ${userId}`;
+    }
+    return getProfile(userId);
+}
+
+export async function changePassword(userId, current, next) {
+    await ensureReady();
+    const u = (await sql`SELECT password_hash FROM users WHERE id = ${userId}`)[0];
+    if (!u || !(await verifyPassword(String(current ?? ""), u.password_hash))) {
+        throw new BookingError("Current password is incorrect", 403);
+    }
+    const n = String(next ?? "");
+    if (n.length < 6 || n.length > 200) throw new BookingError("New password must be at least 6 characters", 422);
+    await sql`UPDATE users SET password_hash = ${await hashPassword(n)} WHERE id = ${userId}`;
+    return { ok: true };
 }
